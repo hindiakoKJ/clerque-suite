@@ -16,14 +16,25 @@ import type { NextFunction, Request, Response } from 'express';
  * address would become `req.ip`, and the login throttle could be walked
  * around by changing a header. So nothing a caller can type is trusted:
  *
- *   1. The LAST X-Forwarded-For entry is written by Railway's edge: it is the
- *      machine that connected to Railway. A caller cannot forge it.
+ *   1. Railway writes X-Forwarded-For itself. Measured on production
+ *      (2026-09-22, GET /health/ip through Cloudflare, with a forged
+ *      X-Forwarded-For and X-Real-IP sent along): the header arrived as
+ *      "172.71.87.155, 152.233.15.120" -- the Cloudflare server that
+ *      connected to Railway's edge, then Railway's edge itself (a CDN77
+ *      address in Singapore), which Railway's inner proxy appends. Whatever
+ *      the caller sent was thrown away. So the entry just before Railway's
+ *      own hop (RAILWAY_EDGE_HOPS) is the machine that connected to Railway,
+ *      and a caller cannot forge it.
  *   2. Only when that machine is one of Cloudflare's published addresses did
  *      the request really come through Cloudflare, and only then is
  *      CF-Connecting-IP (which Cloudflare always overwrites) believed.
  *   3. Otherwise the caller came straight to Railway, and the address Railway
- *      saw IS the caller. Everything to its left was typed by the caller and
- *      is ignored.
+ *      saw IS the caller. Anything further left could only have been typed
+ *      by the caller and is ignored.
+ *
+ * The first version of this file took the LAST entry as the machine that
+ * connected to Railway. That was Railway's own edge, so every shop shared
+ * one address again. GET /health/ip is the check after any change here.
  *
  * Cloudflare's ranges change about once in several years
  * (https://www.cloudflare.com/ips/). If one is ever missing here the failure
@@ -60,25 +71,38 @@ export function isCloudflareIp(raw: unknown): boolean {
 }
 
 /**
- * Express "trust proxy" rule. Hop 0 is the socket itself -- Railway's edge,
- * the only thing that can reach this process -- and further hops are trusted
- * only while they are Cloudflare. Keeps req.protocol and req.ips honest.
+ * How many addresses Railway adds to X-Forwarded-For after the machine that
+ * connected to it: one, its edge (see the note at the top). Zero anywhere
+ * else -- local development has no proxy in front.
+ */
+export const RAILWAY_EDGE_HOPS =
+  process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID ? 1 : 0;
+
+/**
+ * Express "trust proxy" rule. Hop 0 is the socket itself -- Railway's
+ * private network, the only thing that can reach this process -- then
+ * Railway's edge, and further hops are trusted only while they are
+ * Cloudflare. Keeps req.protocol and req.ips honest.
  */
 export function trustProxy(address: string, hop: number): boolean {
-  return hop === 0 || isCloudflareIp(address);
+  return hop <= RAILWAY_EDGE_HOPS || isCloudflareIp(address);
 }
 
 export function resolveClientIp(input: {
   socketAddress: string | null | undefined;
   forwardedFor: string | string[] | null | undefined;
   cfConnectingIp: string | string[] | null | undefined;
+  /** Addresses the hosting proxy appends after the machine that connected to it (RAILWAY_EDGE_HOPS in production). */
+  edgeHops?: number;
 }): string | undefined {
   const socket = normaliseIp(input.socketAddress) ?? undefined;
   const header = Array.isArray(input.forwardedFor) ? input.forwardedFor.join(',') : input.forwardedFor ?? '';
   const hops = header.split(',').map((h) => h.trim()).filter(Boolean);
   if (hops.length === 0) return socket;   // nothing in front of us: local development
 
-  const edgePeer = normaliseIp(hops[hops.length - 1]);
+  // The machine that connected to the hosting proxy: the entry before the proxy's own. A single entry is that machine.
+  const peerAt = Math.max(0, hops.length - 1 - (input.edgeHops ?? 0));
+  const edgePeer = normaliseIp(hops[peerAt]);
   if (!edgePeer) return socket;
   if (!isCloudflareIp(edgePeer)) return edgePeer;   // came straight to Railway
 
@@ -87,7 +111,7 @@ export function resolveClientIp(input: {
   if (viaCloudflare) return viaCloudflare;
 
   // Cloudflare always sends CF-Connecting-IP; if it ever does not, take the first address to its left that is not Cloudflare's own.
-  for (let i = hops.length - 2; i >= 0; i--) {
+  for (let i = peerAt - 1; i >= 0; i--) {
     const a = normaliseIp(hops[i]);
     if (!a) break;
     if (!isCloudflareIp(a)) return a;
@@ -99,15 +123,20 @@ export function resolveClientIp(input: {
  * Pins `req.ip` to the caller worked out above, for everything downstream:
  * the rate limiter, the login log and lockout, the audit trail.
  */
-export function clientIpMiddleware(req: Request, _res: Response, next: NextFunction): void {
-  const ip = resolveClientIp({
-    socketAddress:  req.socket?.remoteAddress,
-    forwardedFor:   req.headers['x-forwarded-for'],
-    cfConnectingIp: req.headers['cf-connecting-ip'],
-  });
-  if (ip) Object.defineProperty(req, 'ip', { value: ip, configurable: true, enumerable: true });
-  next();
+export function clientIpMiddlewareFor(edgeHops: number) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const ip = resolveClientIp({
+      socketAddress:  req.socket?.remoteAddress,
+      forwardedFor:   req.headers['x-forwarded-for'],
+      cfConnectingIp: req.headers['cf-connecting-ip'],
+      edgeHops,
+    });
+    if (ip) Object.defineProperty(req, 'ip', { value: ip, configurable: true, enumerable: true });
+    next();
+  };
 }
+
+export const clientIpMiddleware = clientIpMiddlewareFor(RAILWAY_EDGE_HOPS);
 
 /**
  * The bucket an address is rate-limited in. An IPv4 address is its own

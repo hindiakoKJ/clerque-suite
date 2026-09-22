@@ -40,7 +40,8 @@ export class HealthController {
    */
   @Get('ip')
   ip(@Req() req: Request) {
-    // TEMPORARY (2026-09-22): the proxy chain as it really arrives on Railway, to fix client-ip.ts. Remove with that fix.
+    // The forwarding headers as they really arrive, in the log only. This is how client-ip.ts was
+    // corrected (Railway appends its own edge); if Railway or Cloudflare change, it shows here first.
     this.logger.log(`ip-chain ${JSON.stringify({
       xff: req.headers?.['x-forwarded-for'] ?? null,
       xRealIp: req.headers?.['x-real-ip'] ?? null,

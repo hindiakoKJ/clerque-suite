@@ -1,6 +1,6 @@
 import express from 'express';
 import request from 'supertest';
-import { clientIpMiddleware, isCloudflareIp, normaliseIp, rateLimitBucket, resolveClientIp, trustProxy } from './client-ip';
+import { clientIpMiddleware, clientIpMiddlewareFor, isCloudflareIp, normaliseIp, rateLimitBucket, resolveClientIp, trustProxy } from './client-ip';
 
 /**
  * Who the API believes is calling. The rate limiter, the bad-login lockout
@@ -95,6 +95,55 @@ describe('client IP behind Cloudflare -> Railway', () => {
     it('never throws on junk', () => {
       expect(rateLimitBucket(undefined)).toBe('unknown');
       expect(rateLimitBucket('nope')).toBe('unknown');
+    });
+  });
+
+  /**
+   * The chain exactly as production delivered it on 2026-09-22: Railway
+   * replaces X-Forwarded-For with the machine that connected to its edge,
+   * then appends its edge (CDN77, Singapore). The first version of the
+   * resolver read that last entry and gave every shop Railway's address.
+   */
+  describe('on Railway, which adds its own edge after the connecting machine', () => {
+    const EDGE = '152.233.15.120';     // Railway's edge, appended last
+    const CF_SEEN = '172.71.87.155';   // the Cloudflare server Railway saw
+    const onRailway = (forwardedFor: string, cfConnectingIp?: string | string[]) =>
+      resolveClientIp({ socketAddress: '::ffff:100.64.0.2', forwardedFor, cfConnectingIp, edgeHops: 1 });
+
+    it('the captured production request resolves to the caller, not Railway edge', () => {
+      expect(onRailway(`${CF_SEEN}, ${EDGE}`, '136.158.100.44')).toBe('136.158.100.44');
+      // What the first version did with the same request.
+      expect(resolveClientIp({ socketAddress: '::ffff:100.64.0.2', forwardedFor: `${CF_SEEN}, ${EDGE}`, cfConnectingIp: '136.158.100.44' })).toBe(EDGE);
+    });
+
+    it('two shops through the same Cloudflare server and Railway edge are two callers', () => {
+      expect(onRailway(`${CF_SEEN}, ${EDGE}`, CAFE)).toBe(CAFE);
+      expect(onRailway(`${CF_SEEN}, ${EDGE}`, SCANNER)).toBe(SCANNER);
+    });
+
+    it('straight to Railway edge: a forged CF-Connecting-IP buys nothing', () => {
+      expect(onRailway(`${SCANNER}, ${EDGE}`, CAFE)).toBe(SCANNER);
+    });
+
+    it('if Railway ever kept what the caller typed, the typed part is still ignored', () => {
+      expect(onRailway(`8.8.8.8, ${CF_SEEN}, ${EDGE}`, SCANNER)).toBe(SCANNER);
+      expect(onRailway(`8.8.8.8, ${SCANNER}, ${EDGE}`, CAFE)).toBe(SCANNER);
+    });
+
+    it('if Railway ever stopped adding its edge, a single entry is still the connecting machine', () => {
+      expect(onRailway(SCANNER, CAFE)).toBe(SCANNER);
+      expect(onRailway(CF_SEEN, CAFE)).toBe(CAFE);
+    });
+
+    it('wired into Express the way main.ts does on Railway', async () => {
+      const app = express();
+      app.set('trust proxy', trustProxy);
+      app.use(clientIpMiddlewareFor(1));
+      app.get('/ip', (req, res) => { res.json({ ip: req.ip }); });
+      const viaCloudflare = await request(app).get('/ip').set('X-Forwarded-For', `${CF_SEEN}, ${EDGE}`).set('CF-Connecting-IP', CAFE);
+      expect(viaCloudflare.body.ip).toBe(CAFE);
+      const direct = await request(app).get('/ip').set('X-Forwarded-For', `${SCANNER}, ${EDGE}`).set('CF-Connecting-IP', CAFE);
+      expect(direct.body.ip).toBe(SCANNER);
     });
   });
 

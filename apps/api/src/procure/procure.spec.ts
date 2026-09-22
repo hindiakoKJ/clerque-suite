@@ -2592,6 +2592,22 @@ describe('ProcureService', () => {
       ], 'Kitchen screen');
     });
 
+    it('says a line is a starting amount, so the owner does not read a kilo of it as a forecast', async () => {
+      const { svc, notified } = build({ people: PEOPLE, lastPacks: packs });
+      const alerts = { buyListUpdated: jest.fn(), buyListSent: jest.fn() };
+      svc.telegramAlerts = alerts;
+      await svc.tellTheOwners(TENANT, req, null, 'pairer', {
+        mode: 'updated',
+        changed: [{ rawMaterialId: 'rm-sug', was: null }],
+        byLabel: 'Kitchen screen',
+        startingIds: ['rm-sug'],
+      });
+      expect(notified[0].body).toBe('White Sugar 500 g (starting amount: out, no sales history yet)');
+      expect(alerts.buyListUpdated).toHaveBeenCalledWith(TENANT, 'req1', [
+        { name: 'White Sugar', amount: '500 g (starting amount: out, no sales history yet)', serves: null },
+      ], 'Kitchen screen');
+    });
+
     it('an update that changed nothing tells nobody', async () => {
       const { svc, notified } = build({ people: PEOPLE });
       expect(await svc.tellTheOwners(TENANT, req, null, 'pairer', { mode: 'updated', changed: [] })).toEqual([]);

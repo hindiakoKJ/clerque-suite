@@ -265,6 +265,28 @@ describe('station request plan', () => {
     expect(line(one({}, { existing: new Map([['oat', 1000]]) }), 'oat')).toMatchObject({ qty: 1000, action: 'KEEP' });
   });
 
+  it('a starting amount never raises an amount somebody chose: the cook\'s + 200 g stands', () => {
+    // Morning: the cook put Parsley on the list at 200 g by hand. Afternoon: it sold down to 0, and another tap runs.
+    const r = plan({
+      items: [item({ id: 'parsley', name: 'Parsley', unit: 'g', available: 0 })],
+      existing: new Map([['parsley', 200]]),
+    });
+    expect(line(r, 'parsley')).toMatchObject({ existing: 200, action: 'KEEP' });
+  });
+
+  it('the closing job asks for no starting amount: an out item with nothing to size it by is left under check', () => {
+    const r = plan({
+      startingAmounts: false,
+      items: [
+        item({ id: 'flour', name: 'All Purpose Flour', unit: 'g', available: 0 }),
+        // A known pack still goes on as one pack, as it always has.
+        item({ id: 'oat', name: 'Oat milk', unit: 'ml', available: 0, packSize: 1000 }),
+      ],
+    });
+    expect(r.lines.map((l) => [l.rawMaterialId, l.qty])).toEqual([['oat', 1000]]);
+    expect(r.check).toEqual([{ rawMaterialId: 'flour', name: 'All Purpose Flour', reason: 'Out, and Clerque has no pack size for it yet. Add it with +.' }]);
+  });
+
   it('plans for today until 10:00 Manila, and for tomorrow from then', () => {
     expect(plannedDayFor(new Date('2026-09-17T09:59:00+08:00'))).toEqual({ today: TODAY, plannedDay: TODAY });
     expect(plannedDayFor(new Date('2026-09-17T10:00:00+08:00'))).toEqual({ today: TODAY, plannedDay: FRIDAY });

@@ -8,7 +8,8 @@ import type { StationContext } from '../kds/station-access';
 import { ProcureService, afterHeld, amountWords, namesInWords, onTheWay } from './procure.service';
 import { readTag, withTag } from './procure-notes';
 import {
-  HistoryDay, PlanItem, PlanResult, SENT_LIST_HOURS, addDays, closingSentSince, historyFromUsage, planRequest, plannedDayFor,
+  HistoryDay, PlanItem, PlanResult, SENT_LIST_HOURS, STARTING_AMOUNT_WHY, addDays, closingSentSince, historyFromUsage, planRequest,
+  plannedDayFor,
 } from './station-request-plan';
 
 /** What the closing job did for one branch. */
@@ -259,13 +260,19 @@ export class StationRequestService {
         });
         if (full) {
           const newItems = newIds.length > 0 && ctx.stationName ? { ids: newIds, screen: `${ctx.stationName} screen` } : null;
+          // Lines this tap added at a starting amount: the owner is told it is a guess, not a forecast.
+          const addedIds = new Set(changes.filter((c) => c.was == null).map((c) => c.rawMaterialId));
+          const startingIds = (plan?.lines ?? [])
+            .filter((l) => addedIds.has(l.rawMaterialId) && l.why.includes(STARTING_AMOUNT_WHY))
+            .map((l) => l.rawMaterialId);
+          const starting = startingIds.length > 0 ? { startingIds } : {};
           if (outcome === 'SENT') {
             // The copy for the group chat, filed as it was when the list went out.
             const pdf = await this.procure.fileRequestPdf(ctx.tenantId, list.id, 'sent', ctx.actorId ?? ctx.createdById);
-            names = await this.procure.tellTheOwners(ctx.tenantId, full, pdf, ctx.actorId, { byLabel: ctx.byLabel, newItems });
+            names = await this.procure.tellTheOwners(ctx.tenantId, full, pdf, ctx.actorId, { byLabel: ctx.byLabel, newItems, ...starting });
           } else {
             names = await this.procure.tellTheOwners(ctx.tenantId, full, null, ctx.actorId, {
-              mode: 'updated', changed: changes, byLabel: ctx.byLabel, newItems,
+              mode: 'updated', changed: changes, byLabel: ctx.byLabel, newItems, ...starting,
             });
           }
         }
@@ -476,6 +483,8 @@ export class StationRequestService {
       existing: new Map((list?.lines ?? []).map((l) => [l.rawMaterialId, Number(l.qtyRequested)])),
       extras:   byHand,
       extraReason: ctx.stationName ? `Added by hand on the ${ctx.stationName} screen` : 'Added by hand',
+      // Only a tap guesses a starting amount; the closing job leaves those items under "check".
+      startingAmounts: ctx.source === 'STATION',
     });
     if (plan.cycle.length > 0) {
       this.logger.warn(`Preps whose recipes loop into each other were left out of the buy list plan (shop ${tenantId}): ${plan.cycle.join(', ')}`);

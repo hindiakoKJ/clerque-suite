@@ -4,6 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { readHighlight, pinHighlighted } from './highlight.ts';
 
 test('the entry id is read from ?highlight=', () => {
@@ -24,4 +25,10 @@ test('the asked-for entry goes on top, once, and the rest keep their order', () 
   // Not on this page (older than the newest 50): still shown, on top.
   assert.deepEqual(pinHighlighted(rows, { id: 'z' }).map((r) => r.id), ['z', 'a', 'b', 'c']);
   assert.equal(pinHighlighted(rows, null), rows);
+});
+
+test('the banner does not say where the link came from: a pasted or bookmarked link is not "from the account ledger"', () => {
+  const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /Showing <span className="font-mono font-semibold">\{highlighted\.entryNumber\}<\/span>\. It is on top and opened\./);
+  assert.doesNotMatch(page, /from the account ledger\. It is on top/);
 });

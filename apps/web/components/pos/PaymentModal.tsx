@@ -756,6 +756,10 @@ function BrandTab({
   reference: string;
   setReference: (v: string) => void;
 }) {
+  // The shop's own name (COR name, else the account name) from the sign-in
+  // token. It used to read a fixed "Your business"; with no name known the
+  // "Pay to" block is left out rather than showing a placeholder.
+  const shopName = useAuthStore((s) => (s.user as JwtPayload | null)?.businessName?.trim() ?? '');
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-4 sm:gap-8 [@media(max-height:700px)]:gap-4">
       <div className="space-y-5">
@@ -770,27 +774,23 @@ function BrandTab({
             <div>
               <div className="font-display text-lg font-bold">Customer pays via {brandName}</div>
               <div className="text-[13px] text-muted-foreground mt-0.5">
-                Show this QR or send a request. They'll get a confirmation SMS.
+                They pay the shop&apos;s {brandName} and get a confirmation SMS. Type its reference number below.
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-4 sm:gap-6">
-            {/* QR placeholder */}
-            <div
-              className="rounded-xl border-2 flex items-center justify-center text-muted-foreground bg-white"
-              style={{ width: 220, height: 220, borderColor: 'hsl(var(--border))' }}
-            >
-              <div className="text-center">
-                <div className="font-display text-2xl font-bold" style={{ color: brand }}>{brandName}</div>
-                <div className="text-[11px] uppercase tracking-wider mt-1">QR Code</div>
-              </div>
-            </div>
-            <div className="flex-1">
+          {/*
+            There used to be a 220px box here labelled "QR Code" with no code in
+            it, beside "Show this QR". Clerque has no QR to show; the shop's own
+            standee is at the counter. It also pushed the required reference
+            box below the dialog's footer on a 600px-tall till.
+          */}
+          {shopName && (
+            <div>
               <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Pay to</div>
-              <div className="font-display text-xl font-bold">Your business</div>
+              <div className="font-display text-xl font-bold">{shopName}</div>
               <div className="text-[13px] text-muted-foreground font-mono-counter tnum mt-1">via {brandName}</div>
             </div>
-          </div>
+          )}
         </div>
 
         <div className="rounded-2xl border border-border bg-card shadow-md p-5">

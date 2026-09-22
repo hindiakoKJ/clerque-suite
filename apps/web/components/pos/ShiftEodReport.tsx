@@ -1,7 +1,7 @@
 'use client';
 import { useRef } from 'react';
 import { Printer, Zap, LogOut } from 'lucide-react';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { printer } from '@/lib/pos/printer';
 import { usePrinterStore } from '@/store/pos/printer';
@@ -149,9 +149,12 @@ export function ShiftEodReport({ open, data, onClose, signOutOnClose = false }: 
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent
+        aria-describedby={undefined}
         className="max-w-[1100px] w-[95vw] p-0 gap-0 border-0 bg-transparent shadow-none"
         style={{ background: 'transparent' }}
       >
+        {/* Screen readers need a name for the dialog; the visible heading below is the one staff read. */}
+        <DialogTitle className="sr-only">Close shift Z-read</DialogTitle>
         <div
           className="flex flex-col rounded-2xl overflow-hidden border border-border max-h-[92vh] shadow-2xl"
           style={{ background: 'hsl(var(--muted))' }}

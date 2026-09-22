@@ -145,7 +145,7 @@ export function PwdScModal({ open, onClose }: PwdScModalProps) {
         screen, the form scrolls in the middle, and Cancel / Apply stay pinned
         at the bottom so the cashier can always reach them.
       */}
-      <DialogContent className={`max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted ${DIALOG_FIT_FRAME}`}>
+      <DialogContent aria-describedby={undefined} className={`max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted ${DIALOG_FIT_FRAME}`}>
         <DialogHeader className="mb-0 shrink-0 px-6 pt-5 pb-3">
           <DialogTitle className="font-display text-xl font-bold">
             {isAdditional

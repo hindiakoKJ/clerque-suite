@@ -1,7 +1,7 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import ExcelJS from 'exceljs';
-import { taxStatusFlags, type TaxStatus } from '@repo/shared-types';
+import { PH_TIMEZONE, taxStatusFlags, type TaxStatus } from '@repo/shared-types';
 
 // ── BIR form result types ────────────────────────────────────────────────────
 
@@ -66,10 +66,16 @@ export interface EisInvoiceJson {
 
 // ── Quarter helpers ──────────────────────────────────────────────────────────
 
+/*
+  The quarter is read against GL business dates, which are stored as UTC
+  midnight ('YYYY-MM-DD'), so the bounds are UTC calendar days — the same as
+  the whole-year branch. `new Date(year, m, 1)` used the server's own zone: on
+  a Manila machine Q3 printed as "2026-06-30 – 2026-09-30".
+*/
 function quarterBounds(year: number, quarter: 1 | 2 | 3 | 4): { from: Date; to: Date } {
   const starts = [0, 3, 6, 9];
-  const from   = new Date(year, starts[quarter - 1]!, 1);
-  const to     = new Date(year, starts[quarter - 1]! + 3, 0, 23, 59, 59, 999); // last ms of last month
+  const from   = new Date(Date.UTC(year, starts[quarter - 1]!, 1));
+  const to     = new Date(Date.UTC(year, starts[quarter - 1]! + 3, 0, 23, 59, 59, 999)); // last ms of last month
   return { from, to };
 }
 
@@ -104,6 +110,15 @@ export function phMonthBounds(year: number, month: number): { from: Date; to: Da
 
 function toIso(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * A book row's date, as the Manila calendar day. The API runs on UTC, where a
+ * bare toLocaleDateString put every sale before 8 AM on the previous day —
+ * the 1 October book listed its 7:30 AM sales as 9/30.
+ */
+function phDay(d: Date): string {
+  return d.toLocaleDateString('en-PH', { timeZone: PH_TIMEZONE });
 }
 
 /**
@@ -257,12 +272,15 @@ export class BirService {
       const debit   = acct.journalLines.reduce((s, l) => s + Number(l.debit),  0);
       const credit  = acct.journalLines.reduce((s, l) => s + Number(l.credit), 0);
       const balance = acct.normalBalance === 'DEBIT' ? debit - credit : credit - debit;
+      // An account nothing moved this quarter is not a line: a cafe's list read
+      // "Court Rental Income ₱0.00" down to 4116. The totals are unchanged.
+      const listed = Math.abs(balance) >= 0.005;
       if (acct.type === 'REVENUE') {
         grossRevenue += balance;
-        revenueLines.push({ code: acct.code, name: acct.name, balance });
+        if (listed) revenueLines.push({ code: acct.code, name: acct.name, balance });
       } else {
         totalExpenses += balance;
-        expenseLines.push({ code: acct.code, name: acct.name, balance });
+        if (listed) expenseLines.push({ code: acct.code, name: acct.name, balance });
       }
     }
 
@@ -485,7 +503,7 @@ export class BirService {
     ws.getCell('A1').value = `${tenant?.businessName ?? tenant?.name} — Sales Book — ${monthName}`;
     ws.getCell('A1').font  = { bold: true, size: 13 };
     ws.mergeCells('A2:I2');
-    ws.getCell('A2').value = `TIN: ${tenant?.tinNumber ?? 'N/A'} | Generated: ${new Date().toLocaleString('en-PH')}`;
+    ws.getCell('A2').value = `TIN: ${tenant?.tinNumber ?? 'N/A'} | Generated: ${new Date().toLocaleString('en-PH', { timeZone: PH_TIMEZONE })}`;
     ws.getCell('A2').font  = { size: 9, color: { argb: 'FF666666' } };
 
     ws.columns = [
@@ -545,7 +563,8 @@ export class BirService {
       totalAmount += total;
 
       const row = ws.addRow({
-        date:        (o.completedAt ?? o.createdAt).toLocaleDateString('en-PH'),
+        // paidAt is what the book is filtered on; completedAt is when the bar bumped it.
+        date:        phDay(o.paidAt ?? o.completedAt ?? o.createdAt),
         orNumber:    o.orderNumber,
         customer:    o.customerName ?? 'Walk-in',
         grossSales:  total,
@@ -656,7 +675,7 @@ export class BirService {
       totGross += Number(e.grossAmount); totVat += Number(e.inputVat);
       totWht   += Number(e.whtAmount);  totNet  += Number(e.netAmount);
       const row = ws.addRow({
-        date:      e.expenseDate.toLocaleDateString('en-PH'),
+        date:      phDay(e.expenseDate),
         ref:       e.referenceNumber ?? '',
         vendor:    e.vendor?.name ?? '',
         vendorTin: e.vendor?.tin ?? '',
@@ -675,7 +694,7 @@ export class BirService {
       const gross     = +(net + inputVat).toFixed(2);
       totGross += gross; totVat += inputVat; totNet += net;
       const row = ws.addRow({
-        date:      l.receivedAt.toLocaleDateString('en-PH'),
+        date:      phDay(l.receivedAt),
         ref:       l.referenceNumber ?? '',
         // The lot records what was bought, not who from — vendor lives on the
         // AP bill, and only a credit purchase has one. Naming the goods is
@@ -744,7 +763,7 @@ export class BirService {
       totWht    += Number(e.whtAmount);
       totGross  += Number(e.grossAmount);
       const row = ws.addRow({
-        paidAt:  e.paidAt!.toLocaleDateString('en-PH'),
+        paidAt:  phDay(e.paidAt!),
         payRef:  e.paymentRef ?? '',
         payee:   e.vendor?.name ?? '',
         desc:    e.description,
@@ -1062,7 +1081,7 @@ export class BirService {
     // Footer note
     row += 3;
     ws.mergeCells(`A${row}:G${row}`);
-    ws.getCell(`A${row}`).value = `Generated by Clerque on ${new Date(data.generatedAt).toLocaleString('en-PH')}. ` +
+    ws.getCell(`A${row}`).value = `Generated by Clerque on ${new Date(data.generatedAt).toLocaleString('en-PH', { timeZone: PH_TIMEZONE })}. ` +
       `Bills counted: ${data.billCount}. ` +
       `This Excel is auto-prepared from your AP records — review against vendor copies before issuing.`;
     ws.getCell(`A${row}`).font = { italic: true, size: 9, color: { argb: 'FF666666' } };

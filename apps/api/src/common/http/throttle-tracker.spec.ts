@@ -57,6 +57,18 @@ describe('rate-limit tracker', () => {
     expect(throttleTracker(req({ auth, url: '/api/v1/authors' }))).toBe('user:attacker-own-account');
   });
 
+  it('a sign-in route in any letter case, or in absolute form, is still counted by address', () => {
+    // Express matches routes case-insensitively: all of these reach AuthController.
+    const auth = `Bearer ${access({ sub: 'attacker-own-account' })}`;
+    for (const url of [
+      '/api/v1/AUTH/pin-login', '/API/V1/auth/login', '/api/v1/Auth/forgot-password', '/Api/V1/aUtH',
+      'http://api.clerque.test/api/v1/auth/login', 'HTTP://api.clerque.test/API/v1/Auth/pin-login?x=1',
+    ]) {
+      expect(throttleTracker(req({ auth, url }))).toBe('ip:112.198.74.21');
+    }
+    expect(throttleTracker(req({ auth, url: '/API/V1/Authors' }))).toBe('user:attacker-own-account');
+  });
+
   it('a paired-tablet device token is a string the caller chose: counted by address', () => {
     const device = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
     expect(throttleTracker(req({ device }))).toBe('ip:112.198.74.21');

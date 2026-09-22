@@ -1,4 +1,5 @@
 import { IngredientReportsService } from './ingredient-reports.service';
+import { stockValuedEvent } from '../inventory/zero-cost-blend';
 
 /**
  * One ingredient's page: what is on the shelf, and everything that moved it.
@@ -111,6 +112,28 @@ describe('IngredientReportsService — one ingredient\'s movements', () => {
 
     // Two lattes × 15 ml through the add-on, which the product's own recipe never named.
     expect(byKind.CONSUMPTION).toMatchObject({ quantity: -30, totalValue: -45, orderNumber: 'ORD-2026-000088', reference: '2× Latte' });
+  });
+
+  it('does not show the valuing of ₱0 stock as a count: only a real count is a COUNT row', async () => {
+    const { svc, prisma } = build();
+    // 1,829 ml sat on the shelf at ₱0; the first priced delivery values it.
+    const valued = stockValuedEvent({
+      tenantId: TENANT, material: { id: AGAVE, name: 'Agave Syrup', category: null, unit: 'ml' },
+      branchId: 'b1', quantity: 1829, unitCost: 1.4, at: at('2026-09-10T06:00:00+08:00'), reference: 'SI-10442',
+    })!;
+    prisma.accountingEvent.findMany = jest.fn().mockResolvedValue([
+      { id: 'ev-valued', createdAt: at('2026-09-10T06:00:01+08:00'), payload: valued.payload },
+      // The warehouse's opening count: a real count, still on the timeline.
+      { id: 'ev-open', createdAt: at('2026-09-02T08:00:00+08:00'), payload: {
+        kind: 'RAW_MATERIAL_RECEIPT', rawMaterialId: AGAVE, adjustmentType: 'OPENING_BALANCE', reasonCode: 'OPENING_BALANCE',
+        quantity: 500, unitCost: 1.4, referenceNumber: 'CC-0001', branchId: 'b1', reason: 'Opening stock CC-0001',
+      } },
+    ]);
+    const r = await svc.getMovements(TENANT, AGAVE, { from: '2026-09-01', to: '2026-09-30', branchId: 'b1' });
+
+    const counts = r.movements.filter((m) => m.kind === 'COUNT');
+    expect(counts).toHaveLength(1);
+    expect(counts[0]).toMatchObject({ id: 'count-ev-open', quantity: 500, reference: 'CC-0001', reason: 'Opening stock' });
   });
 
   it('asks for whole Manila days, the last day included', async () => {

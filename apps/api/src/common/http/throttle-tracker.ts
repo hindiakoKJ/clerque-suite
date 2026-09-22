@@ -27,7 +27,9 @@ import { rateLimitBucket } from './client-ip';
  * controller and handler), so "30 a second" means 30 calls to ONE endpoint.
  */
 
-const AUTH_ROUTES = /^\/api\/v\d+\/auth(\/|$)/;
+// Case-insensitive because Express routes /API/V1/Auth/pin-login to the same
+// handler; a case-sensitive test let a token holder move to a fresh bucket.
+const AUTH_ROUTES = /^\/api\/v\d+\/auth(\/|$)/i;
 const CACHE = Symbol('throttleTracker');
 const jwt = new JwtService({});
 
@@ -59,8 +61,13 @@ export function throttleTracker(req: TrackedRequest): string {
   if (cached) return cached;
   let tracker = `ip:${rateLimitBucket(req.ip)}`;
   try {
-    const path = (req.originalUrl ?? req.url ?? '').split('?')[0];
-    if (!AUTH_ROUTES.test(path)) {
+    const raw = req.originalUrl ?? req.url ?? '';
+    // The raw path and the parsed one: an absolute-form request line
+    // ("POST http://host/api/v1/auth/login") carries the scheme and host in
+    // originalUrl, and Express still routes it by the pathname. Either one
+    // naming a sign-in route keeps the address; a parse failure does too.
+    const paths = [raw.split('?')[0] ?? '', new URL(raw, 'http://x').pathname];
+    if (!paths.some((p) => AUTH_ROUTES.test(p))) {
       const userId = verifiedUserId(req.headers?.['authorization']);
       if (userId) tracker = `user:${userId}`;
     }

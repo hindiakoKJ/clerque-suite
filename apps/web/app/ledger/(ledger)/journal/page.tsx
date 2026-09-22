@@ -310,7 +310,7 @@ export default function JournalPage() {
         <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--accent)]/30 bg-[var(--accent-soft)] px-3 py-2 text-xs text-foreground">
           <span>
             {highlighted
-              ? <>Showing <span className="font-mono font-semibold">{highlighted.entryNumber}</span> from the account ledger. It is on top and opened.</>
+              ? <>Showing <span className="font-mono font-semibold">{highlighted.entryNumber}</span>. It is on top and opened.</>
               : highlightMissing
                 ? 'That journal entry could not be found.'
                 : 'Finding that journal entry…'}

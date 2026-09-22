@@ -79,14 +79,30 @@ export function clearDeviceToken(): void {
  */
 export async function verifyDeviceToken(token: string): Promise<WhoamiResponse | null> {
   if (!token) return null;
+  const url = `${API_URL}/display-pairing/whoami`;
   try {
     const { data } = await axios.get<WhoamiResponse>(
-      `${API_URL}/display-pairing/whoami`,
+      url,
       // In a header, not the address: a URL ends up in logs (this runs every 30 s).
       { headers: { 'X-Device-Token': token } },
     );
     return data;
-  } catch {
+  } catch (err) {
+    /*
+      An API older than this page reads only ?token= and answers 400 to the
+      header. That is the few minutes of a deploy when the web goes live
+      before the API: clearing the pairing then sends the kitchen tablet back
+      to /pair. Ask once more the old way. The current API answers the header,
+      so a live token only reaches an address on an old API.
+    */
+    if (axios.isAxiosError(err) && err.response?.status === 400) {
+      try {
+        const { data } = await axios.get<WhoamiResponse>(url, { params: { token } });
+        return data;
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
 }

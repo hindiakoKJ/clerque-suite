@@ -71,6 +71,7 @@ export function OpenShiftModal({ onOpen, cashierName, terminals = [] }: OpenShif
         screen. Capped to the screen: the count scrolls, Start Shift stays put.
       */}
       <DialogContent
+        aria-describedby={undefined}
         className={`max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted ${DIALOG_FIT_FRAME}`}
         onInteractOutside={(e) => e.preventDefault()}
       >

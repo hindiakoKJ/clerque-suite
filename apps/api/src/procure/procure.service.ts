@@ -771,6 +771,8 @@ export class ProcureService {
       byLabel?: string | null;
       /** Items a station screen created just now, so the owner knows to set them up. */
       newItems?: { ids: string[]; screen: string } | null;
+      /** Lines put on at a starting amount (out, nothing to size them by): said so, so nobody reads them as a forecast. */
+      startingIds?: string[];
     } = {},
   ): Promise<string[]> {
     const mode = opts.mode ?? 'sent';
@@ -799,11 +801,13 @@ export class ProcureService {
         ? await this.servesByItem(tenantId, [req.branchId], told.map((l) => l.rawMaterialId))
         : null;
       const newIds = new Set(opts.newItems?.ids ?? []);
+      const startingIds = new Set(opts.startingIds ?? []);
       const lines = told.map((l) => {
         const qty  = Number(l.qtyRequested);
         const packSize = packs.get(l.rawMaterialId)?.packSize ?? null;
         const was  = wasOf.get(l.rawMaterialId);
-        const amount = amountWords(qty, l.rawMaterial.unit, packSize);
+        const amount = amountWords(qty, l.rawMaterial.unit, packSize)
+          + (startingIds.has(l.rawMaterialId) ? ' (starting amount: out, no sales history yet)' : '');
         return {
           // A new item from a station screen has no cost or reorder level yet: say where it came from.
           name:   newIds.has(l.rawMaterialId) && opts.newItems

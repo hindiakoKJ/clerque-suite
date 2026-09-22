@@ -59,7 +59,7 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
         digital breakdown show. Capped to the screen: the figures scroll, the
         title and the Cancel / Close Shift buttons stay where they are.
       */}
-      <DialogContent className={`max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted ${DIALOG_FIT_FRAME}`}>
+      <DialogContent aria-describedby={undefined} className={`max-w-md p-0 gap-0 border border-border shadow-2xl bg-muted ${DIALOG_FIT_FRAME}`}>
         <DialogHeader className="mb-0 shrink-0 px-6 pt-5 pb-3">
           <DialogTitle className="font-display text-xl font-bold">Close Shift</DialogTitle>
         </DialogHeader>

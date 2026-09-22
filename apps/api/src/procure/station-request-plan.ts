@@ -83,6 +83,14 @@ export interface PlanInput {
   extras?: Map<string, number>;
   /** Why a hand-added line is there: "Added by hand on the Kitchen screen". */
   extraReason?: string;
+  /**
+   * Put an item that is out with nothing to size it by on the list at a
+   * starting amount (startingQty). A station tap does: the cook is standing
+   * there and sees why. The closing job does not (false): nobody is there to
+   * read it, and it would send the owner a kilo of every never-stocked
+   * ingredient each time the last list went stale. Those go under `check`.
+   */
+  startingAmounts?: boolean;
 }
 
 /** ADD: not on the list yet. RAISE: on it, and this asks for enough more to be news. KEEP: leave it. */
@@ -112,10 +120,10 @@ export interface PlanResult {
   /** Preps that will need making, shallowest first. */
   toMake: Array<{ rawMaterialId: string; name: string; batches: number }>;
   /**
-   * Items somebody has to look at by hand. Nothing is put here now: an item that
-   * is out with nothing to size the ask by goes on the list with a starting
-   * amount instead (startingQty), so a tap never sends nothing while items are
-   * out. Kept so the screen's "Check these" section has its field.
+   * Items somebody has to look at by hand: out, with nothing to size the ask
+   * by. Only when startingAmounts is false (the closing job); a station tap
+   * puts them on the list at a starting amount instead (startingQty), so a tap
+   * never sends nothing while items are out.
    */
   check: Array<{ rawMaterialId: string; name: string; reason: string }>;
   /** Preps whose recipes loop back into each other; left out of the plan. */
@@ -355,7 +363,7 @@ export function planRequest(input: PlanInput): PlanResult {
       if (item.packSize != null && item.packSize > 0) {
         need = item.packSize;
         outNoHistory = true;
-      } else if (extra == null) {
+      } else if (extra == null && input.startingAmounts !== false) {
         /*
           No pack size either -- most of a new shop's items, until each has been
           bought once. It used to be left off the list under "Check these", so a
@@ -365,6 +373,8 @@ export function planRequest(input: PlanInput): PlanResult {
         */
         need = startingQty(item.unit);
         startingAmount = true;
+      } else if (extra == null) {
+        check.push({ rawMaterialId: item.id, name: item.name, reason: 'Out, and Clerque has no pack size for it yet. Add it with +.' });
       }
     }
     if (need <= 0 && coming > 0 && Math.max(lowWanted, forecastNeed) > 0 && extra == null) {
@@ -400,7 +410,8 @@ export function planRequest(input: PlanInput): PlanResult {
       shortBy: need > 0 && !startingAmount ? need : null,
       why,
       existing: existing ?? null,
-      action: existing == null ? 'ADD' : isRaise(qty, existing, item.unit, item.packSize) ? 'RAISE' : 'KEEP',
+      // A starting amount only fills a gap: it never outranks an amount somebody already put on the list.
+      action: existing == null ? 'ADD' : !startingAmount && isRaise(qty, existing, item.unit, item.packSize) ? 'RAISE' : 'KEEP',
     });
   }
   lines.sort((a, b) => a.name.localeCompare(b.name));

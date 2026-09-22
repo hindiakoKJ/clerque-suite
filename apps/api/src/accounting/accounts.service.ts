@@ -422,7 +422,7 @@ export const LEDGER_ONLY_ACCOUNTS: typeof DEFAULT_ACCOUNTS = [
  */
 export type CashFlowSection = 'CASH' | 'OPERATING' | 'INVESTING' | 'FINANCING' | 'SKIP';
 
-export function cashFlowSection(code: number): CashFlowSection {
+export function cashFlowSection(code: number, normalBalance?: 'DEBIT' | 'CREDIT'): CashFlowSection {
   if (!Number.isFinite(code)) return 'SKIP';
   // Real cash and bank: opening / ending balance, not a section.
   if (code >= 1000 && code <= 1029) return 'CASH';
@@ -431,7 +431,11 @@ export function cashFlowSection(code: number): CashFlowSection {
 
   // ── Assets ──
   if (code >= 1030 && code <= 1069) return 'OPERATING';   // receivables, tax assets, inventory, prepayments
-  if (code >= 1070 && code <= 1099) return 'INVESTING';   // equipment, buildings, intangibles, long-term investments
+  // Accumulated depreciation / amortisation (1071, 1076, 1093 ...) is the
+  // credit-normal contra inside that band. Its growth is the month's
+  // depreciation: a non-cash charge added back under Operating, not an
+  // investing inflow as if equipment had been sold.
+  if (code >= 1070 && code <= 1099) return normalBalance === 'CREDIT' ? 'OPERATING' : 'INVESTING';   // equipment, buildings, intangibles, long-term investments
   if (code >= 1100 && code <  1800) return 'OPERATING';   // older wide bands
   if (code >= 1800 && code <  2000) return 'INVESTING';
 
@@ -1013,9 +1017,10 @@ export class AccountsService {
         a section is worse than one that mislabels it: `reconciles` would go
         false with no indication of which accounts went missing.
       */
-      const where = cashFlowSection(code);
+      const where = cashFlowSection(code, a.normalBalance === 'CREDIT' ? 'CREDIT' : 'DEBIT');
       if (where === 'OPERATING') {
-        operating.push({ ...section, label: 'Working capital change' });
+        const nonCash = a.normalBalance === 'CREDIT' && code >= 1070 && code <= 1099;
+        operating.push({ ...section, label: nonCash ? 'Depreciation / amortisation (non-cash)' : 'Working capital change' });
       } else if (where === 'INVESTING') {
         investing.push({ ...section, label: 'Equipment & long-term assets' });
       } else if (where === 'FINANCING') {

@@ -14,6 +14,8 @@ describe('StationRequestService', () => {
   const NOW = new Date('2026-09-17T15:00:00+08:00');   // planning Friday Sep 18
   const HOUR = 3_600_000;
   const LATER_CLOSING = new Date('2026-09-17T21:30:00+08:00');
+  const BRANCH_AT_CLOSING = { id: 'b1', tenantId: 't1', name: 'Main' };
+  const DUE_AT_CLOSING = { day: '2026-09-17', closedAt: new Date('2026-09-17T21:00:00+08:00') };
 
   const KITCHEN: RequestContext = {
     tenantId: T, branchId: B, branchName: 'Main', stationKind: 'KITCHEN', stationName: 'Kitchen',
@@ -306,6 +308,18 @@ describe('StationRequestService', () => {
     }]);
     expect(requests[0].lines[0]).toMatchObject({ rawMaterialId: 'sugar', qtyRequested: 1000, shortBy: null });
     expect(procure.tellTheOwners).toHaveBeenCalledTimes(1);
+    // The owner's bell and Telegram say it is a starting amount, not a forecast.
+    expect(procure.tellTheOwners.mock.calls[0][4]).toMatchObject({ startingIds: ['sugar'] });
+  });
+
+  it('at closing, an item out with nothing to size it by is NOT put on the list at a made-up amount', async () => {
+    // The same never-stocked sugar. Nobody is at a screen to read "starting amount", and the list would come back every
+    // time the last one went stale: the closing job leaves it off, as it did before starting amounts.
+    const { svc, requests, procure } = build({ noHistory: true, stock: { milk: 50_000, sugar: 0, syrup: 5000, tissue: 20 } });
+    expect(await svc.sendAtClosingIfNothingSent(BRANCH_AT_CLOSING, DUE_AT_CLOSING, LATER_CLOSING)).toBe('SENT');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].lines).toEqual([]);
+    expect(procure.tellTheOwners.mock.calls[0][4]).not.toHaveProperty('startingIds');
   });
 
   it('first day at closing: an empty list is not called an all-clear', async () => {

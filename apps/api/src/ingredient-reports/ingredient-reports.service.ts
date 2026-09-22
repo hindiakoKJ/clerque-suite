@@ -248,6 +248,14 @@ export class IngredientReportsService {
       // A physical count's correction, or the shop's opening count.
       const adjustment = p['adjustmentType'];
       if (p['rawMaterialId'] === rawMaterialId && (adjustment === 'COUNT_CORRECTION' || adjustment === 'OPENING_BALANCE')) {
+        /*
+          Not every OPENING_BALANCE is a count. When stock sitting at ₱0 meets
+          its first priced delivery, stockValuedEvent (zero-cost-blend.ts)
+          books that old stock's value with the same adjustmentType — no goods
+          moved, and the delivery is already on the timeline as its lot. That
+          event carries `receivedAt`; a warehouse count never does.
+        */
+        if (adjustment === 'OPENING_BALANCE' && typeof p['receivedAt'] === 'string') continue;
         if (!inRange(ev.createdAt)) continue;
         const qty = Number(p['quantity'] ?? 0);
         if (!qty) continue;

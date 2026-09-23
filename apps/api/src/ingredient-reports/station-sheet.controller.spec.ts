@@ -90,8 +90,9 @@ describe('the daily inventory sheet routes', () => {
       expect(stationSheet).not.toHaveBeenCalled();
     });
 
-    it('still reads for a screen whose pairer has left: reading changes nothing', async () => {
-      await expect(controller.dailyInventory(device({ sub: 'left' }), 's-kitchen')).resolves.toBeDefined();
+    // Since 2026-09-23 a tablet paired by someone who has left keeps nothing: the sheet is the shop's, not theirs.
+    it('refuses a screen whose pairer has left, reads included', async () => {
+      await expect(controller.dailyInventory(device({ sub: 'left' }), 's-kitchen')).rejects.toThrow('no longer has an active account');
     });
 
     it('a logged-in person reads any station of their shop, and not another shop\'s', async () => {

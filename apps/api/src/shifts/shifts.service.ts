@@ -535,8 +535,21 @@ ${line}` : line },
       );
     }
 
-    // PAID_OUT above threshold requires manager co-auth.
-    if (dto.type === 'PAID_OUT' && dto.amount > PAID_OUT_APPROVAL_THRESHOLD) {
+    /*
+      A paid-out at or above the threshold needs a manager. So does one that
+      only stays under it by being split: three unapproved ₱200 paid-outs on
+      one shift are a ₱600 paid-out nobody signed, so the unapproved total of
+      the shift counts toward the line, not just this slip.
+    */
+    let unapprovedSoFar = 0;
+    if (dto.type === 'PAID_OUT' && !dto.approvedById) {
+      const prior = await this.prisma.shiftCashOut.aggregate({
+        where: { shiftId, type: 'PAID_OUT', approvedById: null },
+        _sum:  { amount: true },
+      });
+      unapprovedSoFar = Number(prior._sum.amount ?? 0);
+    }
+    if (dto.type === 'PAID_OUT' && (dto.amount >= PAID_OUT_APPROVAL_THRESHOLD || unapprovedSoFar + dto.amount >= PAID_OUT_APPROVAL_THRESHOLD)) {
       if (!dto.approvedById) {
         throw new ForbiddenException(
           `Paid-outs over ₱${PAID_OUT_APPROVAL_THRESHOLD} require manager approval. ` +

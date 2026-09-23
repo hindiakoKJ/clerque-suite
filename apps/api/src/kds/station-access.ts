@@ -32,7 +32,10 @@ export interface StationContext {
 
 export async function stationContext(
   prisma: Pick<PrismaService, 'station' | 'user' | 'branch'>,
-  user: StationCaller, stationId: string, opts: { write: boolean },
+  // `write` is kept for callers and readers of the contract: since 2026-09-23 a
+  // read is refused on the same grounds as a write (a departed pairer), so
+  // nothing branches on it any more.
+  user: StationCaller, stationId: string, _opts: { write: boolean },
 ): Promise<StationContext> {
   const tenantId = user.tenantId!;
   if (user.isDevice) {
@@ -46,7 +49,8 @@ export async function stationContext(
   const station = await prisma.station.findFirst({ where: { id: stationId, tenantId }, select: { id: true, name: true, kind: true, branchId: true } });
   if (!station) throw new NotFoundException('Station not found.');
   const person = await prisma.user.findFirst({ where: { id: user.sub, tenantId }, select: { id: true, name: true, branchId: true, isActive: true } });
-  if (!person || (opts.write && !person.isActive)) {
+  // Reads too: a tablet paired by someone who has since left keeps nothing.
+  if (!person || !person.isActive) {
     throw new ForbiddenException(user.isDevice
       ? 'The person who paired this screen no longer has an active account. Pair it again.'
       : 'Your account is not active.');

@@ -72,7 +72,14 @@ export class KdsController {
          'SUPER_ADMIN', 'GENERAL_EMPLOYEE', 'MDM', 'WAREHOUSE_STAFF',
          'KIOSK_DISPLAY')
   @Get('stations/:id/queue')
-  listQueue(@CurrentUser() user: JwtPayload, @Param('id') stationId: string) {
+  listQueue(
+    @CurrentUser() user: JwtPayload & { isDevice?: boolean; stationId?: string | null },
+    @Param('id') stationId: string,
+  ) {
+    // A paired tablet reads its own station's queue, not another's (the prep route already checks this).
+    if (user.isDevice && user.stationId && user.stationId !== stationId) {
+      throw new ForbiddenException('This screen is paired to another station.');
+    }
     return this.kds.listStationQueue(user.tenantId!, stationId);
   }
 

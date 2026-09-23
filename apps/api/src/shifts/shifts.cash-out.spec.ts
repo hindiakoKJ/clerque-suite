@@ -63,6 +63,22 @@ describe('ShiftsService — cash-out approval and trail', () => {
     }));
   });
 
+  it('needs a manager once the unapproved paid-outs of a shift add up to the threshold, even when each slip is small', async () => {
+    const { svc, prisma } = build();
+    // The till check (all cash-outs) and the approval check (unapproved paid-outs) both aggregate; tell them apart by the where clause.
+    prisma.shiftCashOut.aggregate.mockImplementation(async ({ where }: any) =>
+      where?.approvedById === null ? { _sum: { amount: 350 } } : { _sum: { amount: 350 } });
+    const small = { type: 'PAID_OUT' as const, amount: 200, reason: 'Bought ice from next door' };
+    await expect(svc.recordCashOut(TENANT, SHIFT, CASHIER, small)).rejects.toThrow(/require manager approval/);
+  });
+
+  it('lets a small paid-out through when the shift has little unapproved so far', async () => {
+    const { svc, prisma } = build();
+    prisma.shiftCashOut.aggregate.mockResolvedValue({ _sum: { amount: 100 } });
+    const small = { type: 'PAID_OUT' as const, amount: 200, reason: 'Bought ice from next door' };
+    await expect(svc.recordCashOut(TENANT, SHIFT, CASHIER, small)).resolves.toBeDefined();
+  });
+
   it('keeps what a removed cash-out said, and who removed it, before deleting the row', async () => {
     const { svc, prisma, audit } = build();
     const order: string[] = [];

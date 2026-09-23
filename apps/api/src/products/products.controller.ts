@@ -103,6 +103,7 @@ export class ProductsController {
    * reporting because no COGS is posted when they sell. Owner-facing audit
    * list, used by the POS Dashboard "fix me" card.
    */
+  @Roles('BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM')
   @Get('missing-cost')
   findMissingCost(@CurrentUser() user: JwtPayload) {
     return this.productsService.findMissingCost(user.tenantId!);

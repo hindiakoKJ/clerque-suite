@@ -72,10 +72,13 @@ describe('stationContext', () => {
     expect(prisma.station.findFirst).not.toHaveBeenCalled();
   });
 
-  it('refuses a write when the person who paired the screen is no longer active, but still lets it read', async () => {
+  // A tablet paired by someone who has since left keeps nothing, reads included:
+  // the queue and the day's sheet are the shop's, not the ex-employee's.
+  it('refuses a read and a write when the person who paired the screen is no longer active', async () => {
     await expect(stationContext(build({ pairerActive: false }), device(), 's-kitchen', { write: true }))
       .rejects.toThrow(new ForbiddenException('The person who paired this screen no longer has an active account. Pair it again.'));
-    await expect(stationContext(build({ pairerActive: false }), device(), 's-kitchen', { write: false })).resolves.toMatchObject({ actorId: 'mgr' });
+    await expect(stationContext(build({ pairerActive: false }), device(), 's-kitchen', { write: false }))
+      .rejects.toThrow(new ForbiddenException('The person who paired this screen no longer has an active account. Pair it again.'));
     await expect(stationContext(build({ pairerActive: false }), login(), 's-kitchen', { write: true }))
       .rejects.toThrow(new ForbiddenException('Your account is not active.'));
   });

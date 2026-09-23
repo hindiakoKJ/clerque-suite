@@ -62,9 +62,10 @@ describe('StationRequestController', () => {
     expect(requests.preview).not.toHaveBeenCalled();
   });
 
-  it('a screen paired by someone who has left may look, but not send', async () => {
+  // Since 2026-09-23 a tablet paired by someone who has left keeps nothing, not even a look.
+  it('a screen paired by someone who has left may neither look nor send', async () => {
     const { ctl, requests } = build({ pairerActive: false });
-    await expect(ctl.preview(device() as any, 's-kitchen')).resolves.toEqual({ pickable: [] });
+    await expect(ctl.preview(device() as any, 's-kitchen')).rejects.toThrow('no longer has an active account');
     await expect(ctl.request(device() as any, 's-kitchen', {})).rejects.toThrow('no longer has an active account');
     expect(requests.apply).not.toHaveBeenCalled();
   });

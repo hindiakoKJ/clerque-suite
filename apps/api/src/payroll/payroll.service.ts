@@ -11,6 +11,7 @@ import { generatePayslipPdf } from './payslip-pdf';
 import { JournalService } from '../accounting/journal.service';
 import { AccountsService } from '../accounting/accounts.service';
 import { AuditService } from '../audit/audit.service';
+import { hasPermission } from '@repo/shared-types';
 import {
   computeBasicPay as computeBasicPayPh,
   computePayslip,
@@ -295,7 +296,18 @@ export class PayrollService {
 
   // ─── Employees List ──────────────────────────────────────────────────────
 
-  async getEmployees(tenantId: string): Promise<EmployeeDto[]> {
+  async getEmployees(
+    tenantId: string,
+    callerRole?: string | null,
+    callerCustomPermissions?: readonly string[] | null,
+  ): Promise<EmployeeDto[]> {
+    /*
+      The roster is a manager's business (timesheets, who is on today); the
+      pay rate is not. Anyone without payroll:view_salary gets the roster with
+      the rate left out -- the column is not selected at all, mirroring the
+      wall users.service.ts already keeps on the staff list.
+    */
+    const canViewSalary = hasPermission(callerRole ?? '', 'payroll:view_salary', callerCustomPermissions ?? undefined);
     const users = await this.prisma.user.findMany({
       where: {
         tenantId,
@@ -310,8 +322,8 @@ export class PayrollService {
         position:       true,
         isActive:       true,
         hiredAt:        true,
-        salaryRate:     true,
-        salaryType:     true,
+        salaryRate:     canViewSalary,
+        salaryType:     canViewSalary,
         shiftStart:     true,
         shiftEnd:       true,
         branch:         { select: { name: true } },
@@ -328,8 +340,8 @@ export class PayrollService {
       position:   u.position,
       status:     u.isActive ? 'ACTIVE' : 'INACTIVE',
       startDate:  u.hiredAt ? u.hiredAt.toISOString().slice(0, 10) : null,
-      basicRate:  u.salaryRate !== null ? Number(u.salaryRate) : null,
-      salaryType: u.salaryType ?? null,
+      basicRate:  canViewSalary && u.salaryRate != null ? Number(u.salaryRate) : null,
+      salaryType: canViewSalary ? (u.salaryType ?? null) : null,
       shiftStart: u.shiftStart ?? null,
       shiftEnd:   u.shiftEnd   ?? null,
     }));

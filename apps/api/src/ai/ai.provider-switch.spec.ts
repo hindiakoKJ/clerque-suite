@@ -12,7 +12,7 @@
 describe('AiService — who does the work', () => {
   const OLD_ENV = process.env;
 
-  afterEach(() => { process.env = OLD_ENV; jest.resetModules(); });
+  afterEach(() => { process.env = OLD_ENV; jest.resetModules(); jest.restoreAllMocks(); });
 
   function load(env: Record<string, string | undefined>) {
     jest.resetModules();
@@ -21,8 +21,22 @@ describe('AiService — who does the work', () => {
       AI_FEATURES_ENABLED: 'true',
       ANTHROPIC_API_KEY:   'test-key',
       GOOGLE_CLOUD_PROJECT: 'test-project',
+      // Pinned off so a developer's own shell cannot change what these prove.
+      GOOGLE_CREDENTIALS_JSON: undefined,
+      GEMINI_MODEL:            undefined,
       ...env,
     };
+    /*
+      Quietened on purpose. These cases inject their own clients, so the
+      constructor's "no credentials" warning is correct and irrelevant here —
+      and printed 15 times it buries a real failure. The warning itself is
+      proved in the end-to-end matrix at the bottom of this file.
+    */
+    const { Logger } = require('@nestjs/common') as typeof import('@nestjs/common');
+    for (const level of ['warn', 'error'] as const) {
+      jest.spyOn(Logger.prototype, level).mockImplementation(() => undefined);
+    }
+
     const mod = require('./ai.service') as typeof import('./ai.service');
 
     const usage: any[] = [];
@@ -53,7 +67,7 @@ describe('AiService — who does the work', () => {
     const { mod, svc, gemini, anthropic } = load({ AI_PROVIDER: 'gemini' });
     await expect(ask(svc, { model: mod.MODEL_OPUS })).resolves.toBe('from gemini');
 
-    expect(gemini.models.generateContent.mock.calls[0][0].model).toBe('gemini-flash-latest');
+    expect(gemini.models.generateContent.mock.calls[0][0].model).toBe('gemini-3.8-flash');
     expect(anthropic.messages.create).not.toHaveBeenCalled();
   });
 
@@ -63,10 +77,29 @@ describe('AiService — who does the work', () => {
     expect(gemini.models.generateContent.mock.calls[0][0].model).toBe('gemini-2.5-pro');
   });
 
+  /*
+    The escape hatch for the day Google retires 3.8 Flash. The default is a
+    concrete version rather than a "-latest" alias — Vertex does not resolve
+    those — so this variable is how the number gets updated without a deploy.
+  */
   it('honours GEMINI_MODEL when one is configured', async () => {
-    const { svc, gemini } = load({ AI_PROVIDER: 'gemini', GEMINI_MODEL: 'gemini-3.8-flash' });
+    const { svc, gemini } = load({ AI_PROVIDER: 'gemini', GEMINI_MODEL: 'gemini-4.0-flash' });
     await ask(svc);
-    expect(gemini.models.generateContent.mock.calls[0][0].model).toBe('gemini-3.8-flash');
+    expect(gemini.models.generateContent.mock.calls[0][0].model).toBe('gemini-4.0-flash');
+  });
+
+  /*
+    A newer Flash set through GEMINI_MODEL is priced as Gemini, not as Sonnet.
+
+    The pricing table is keyed by model id, and an unlisted id used to drop
+    through to DEFAULT_MODEL — Claude Sonnet, at 2x the input and 2x the
+    output of what was actually spent. The dashboard would have read high and
+    the monthly cap would have fired at half the real usage.
+  */
+  it('prices a model the table has never heard of at the Gemini rate', async () => {
+    const { svc, usage } = load({ AI_PROVIDER: 'gemini', GEMINI_MODEL: 'gemini-4.0-flash' });
+    await ask(svc);
+    expect(usage[0].costUsd).toBeCloseTo((10 / 1e6) * 1.5 + (5 / 1e6) * 7.5, 12);
   });
 
   it('still uses Claude, with the Claude model, when switched back', async () => {
@@ -89,7 +122,7 @@ describe('AiService — who does the work', () => {
     await ask(svc);
     await ask(svc, { provider: 'anthropic' });
     expect(usage.map((u) => u.provider)).toEqual(['gemini', 'anthropic']);
-    expect(usage[0].model).toBe('gemini-flash-latest');
+    expect(usage[0].model).toBe('gemini-3.8-flash');
   });
 
   it('costs a Gemini call at the Gemini rate, not at Sonnet\'s', async () => {
@@ -134,5 +167,166 @@ describe('AiService — who does the work', () => {
     // own copy of @nestjs/common, so the two ServiceUnavailableException
     // constructors are different objects with the same name.
     await expect(ask(svc)).rejects.toThrow(/not configured/i);
+  });
+});
+
+/**
+ * The switch, told honestly.
+ *
+ * Every row here is a state a Railway variables page can actually be in, and
+ * the rule is the same for all of them: either the provider on duty is fully
+ * configured and works, or it is not and the caller gets one plain sentence.
+ * What must never happen is the middle — a client that looks configured, is
+ * missing the one thing it needs, and only says so at the till.
+ *
+ * These build the REAL service with no clients injected, so what is being
+ * checked is the constructor's own decision.
+ */
+describe('AiService — the provider switch, end to end', () => {
+  const OLD_ENV = process.env;
+
+  const FAKE_PEM = '-----BEGIN PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG0FAKE\n-----END PRIVATE KEY-----\n';
+  const KEY_FILE = JSON.stringify({
+    type:         'service_account',
+    project_id:   'clerque-ai',
+    private_key:  FAKE_PEM,
+    client_email: 'clerque-vertex@clerque-ai.iam.gserviceaccount.com',
+  });
+
+  afterEach(() => { process.env = OLD_ENV; jest.resetModules(); });
+
+  function boot(env: Record<string, string | undefined>) {
+    jest.resetModules();
+    process.env = {
+      ...OLD_ENV,
+      AI_FEATURES_ENABLED:            'true',
+      ANTHROPIC_API_KEY:              undefined,
+      AI_PROVIDER:                    undefined,
+      GOOGLE_CLOUD_PROJECT:           undefined,
+      GOOGLE_CREDENTIALS_JSON:        undefined,
+      GOOGLE_APPLICATION_CREDENTIALS: undefined,
+      ...env,
+    };
+    const { Logger } = require('@nestjs/common') as typeof import('@nestjs/common');
+    const warnings: string[] = [];
+    const notices:  string[] = [];
+    for (const level of ['warn', 'error'] as const) {
+      jest.spyOn(Logger.prototype, level).mockImplementation((...args: unknown[]) => {
+        warnings.push(args.map(String).join(' '));
+      });
+    }
+    jest.spyOn(Logger.prototype, 'log').mockImplementation((...args: unknown[]) => {
+      notices.push(args.map(String).join(' '));
+    });
+
+    const mod = require('./ai.service') as typeof import('./ai.service');
+    const prisma: any = {
+      aiUsage: {
+        aggregate: jest.fn().mockResolvedValue({ _sum: { costUsd: 0 } }),
+        create:    jest.fn().mockResolvedValue({}),
+      },
+    };
+    const svc: any = new mod.AiService(prisma);
+    return {
+      svc,
+      warnings: warnings.join('\n'),
+      notices:  notices.join('\n'),
+      provider: mod.AI_PROVIDER,
+    };
+  }
+
+  const ask = (svc: any) =>
+    svc.call({ tenantId: 't1', action: 'receipt_ocr', messages: [{ role: 'user', content: 'hi' }] });
+
+  it('gemini, with a project and a key: configured', () => {
+    const { svc, warnings } = boot({
+      AI_PROVIDER: 'gemini',
+      GOOGLE_CLOUD_PROJECT: 'clerque-ai',
+      GOOGLE_CREDENTIALS_JSON: KEY_FILE,
+    });
+    expect(svc.gemini).not.toBeNull();
+    expect(warnings).toBe('');
+  });
+
+  it('gemini, key only: configured, because the key names its own project', () => {
+    const { svc, warnings } = boot({ AI_PROVIDER: 'gemini', GOOGLE_CREDENTIALS_JSON: KEY_FILE });
+    expect(svc.gemini).not.toBeNull();
+    expect(warnings).toBe('');
+  });
+
+  it('gemini, project only: warns that there is nothing to sign requests with', () => {
+    const { warnings } = boot({ AI_PROVIDER: 'gemini', GOOGLE_CLOUD_PROJECT: 'clerque-ai' });
+    expect(warnings).toMatch(/GOOGLE_CREDENTIALS_JSON/);
+    expect(warnings).toMatch(/metadata server/i);
+  });
+
+  it('gemini, nothing set: no client, and the warning names what is missing', async () => {
+    const { svc, warnings } = boot({ AI_PROVIDER: 'gemini' });
+    expect(svc.gemini).toBeNull();
+    expect(warnings).toMatch(/GOOGLE_CLOUD_PROJECT/);
+    await expect(ask(svc)).rejects.toThrow(/not configured/i);
+  });
+
+  it('gemini, key unreadable: no client, one plain line, and no stack trace', async () => {
+    const { svc, warnings } = boot({
+      AI_PROVIDER: 'gemini',
+      GOOGLE_CLOUD_PROJECT: 'clerque-ai',
+      GOOGLE_CREDENTIALS_JSON: 'pasted-the-wrong-thing',
+    });
+    expect(svc.gemini).toBeNull();
+    expect(warnings).toMatch(/GOOGLE_CREDENTIALS_JSON/);
+    expect(warnings).not.toMatch(/\bat \w+.*\(/);     // no stack frames
+    await expect(ask(svc)).rejects.toThrow(/not configured/i);
+  });
+
+  it('anthropic, with a key: configured, and the Google variables are irrelevant', () => {
+    const { svc, warnings } = boot({ AI_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'sk-ant-test' });
+    expect(svc.client).not.toBeNull();
+    expect(warnings).toBe('');
+  });
+
+  it('anthropic, no key: no client, and the warning names the variable', async () => {
+    const { svc, warnings } = boot({ AI_PROVIDER: 'anthropic' });
+    expect(svc.client).toBeNull();
+    expect(warnings).toMatch(/ANTHROPIC_API_KEY/);
+    await expect(ask(svc)).rejects.toThrow(/not configured/i);
+  });
+
+  // With AI_PROVIDER unset, follow whichever key is actually there — a server
+  // with only an Anthropic key would otherwise pick Gemini and 503 everything.
+  it.each([
+    ['nothing at all',        {},                                                         'gemini'],
+    ['an Anthropic key only', { ANTHROPIC_API_KEY: 'sk-ant-test' },                       'anthropic'],
+    ['a Google project only', { GOOGLE_CLOUD_PROJECT: 'clerque-ai' },                     'gemini'],
+    ['both',                  { ANTHROPIC_API_KEY: 'k', GOOGLE_CLOUD_PROJECT: 'p' },      'gemini'],
+  ])('AI_PROVIDER unset with %s picks %s', (_label, env, expected) => {
+    expect(boot(env as Record<string, string>).provider).toBe(expected);
+  });
+
+  /*
+    The master switch outranks the whole matrix. A fully configured Gemini
+    still spends nothing while AI_FEATURES_ENABLED is anything but "true" —
+    this is the gate that actually prevents spend, checked before the client.
+  */
+  it('spends nothing while the master switch is off, however well configured', async () => {
+    const { svc } = boot({
+      AI_FEATURES_ENABLED: 'false',
+      AI_PROVIDER: 'gemini',
+      GOOGLE_CREDENTIALS_JSON: KEY_FILE,
+    });
+    await expect(ask(svc)).rejects.toThrow(/switched off/i);
+  });
+
+  /*
+    And says so at boot rather than warning about 503s. Every deployment has
+    AI off today; a log line reading "AI features will return 503" on a server
+    where AI was deliberately turned off is a false alarm someone would go and
+    investigate.
+  */
+  it('does not cry wolf at boot when AI is deliberately off', () => {
+    const { warnings, notices } = boot({ AI_FEATURES_ENABLED: 'false' });
+    expect(warnings).toBe('');
+    expect(notices).toMatch(/switched off/i);
+    expect(notices).toMatch(/nothing is spent/i);
   });
 });

@@ -67,3 +67,30 @@ export async function purchaseCostsVisibleTo(
   });
   return canSeePurchaseCosts(role, tenant?.showPurchaseCostsToStaff);
 }
+
+/** Keys that carry what the shop paid, wherever they sit in a product's tree. */
+const COST_KEYS = new Set(['costPrice', 'costPriceIsDerived', 'packCost', 'unitCost', 'lastCost']);
+
+/**
+ * A product (or list of them) with every cost figure left out, recipe
+ * ingredients included. Applied to the product list, detail and barcode
+ * routes for someone the shop hides purchase costs from: those three carried
+ * every make-cost and, through the recipe, each ingredient's buying price to
+ * any signed-in account, while /products/pos alone was gated. Walks the
+ * object graph so a new nested cost field cannot slip through; Decimal and
+ * Date values pass as they are.
+ */
+export function withoutCosts<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => withoutCosts(v)) as unknown as T;
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value;
+  const proto = Object.getPrototypeOf(value);
+  // Prisma.Decimal and other class instances are leaves, not records to walk.
+  if (proto !== Object.prototype && proto !== null) return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (COST_KEYS.has(k)) continue;
+    out[k] = withoutCosts(v);
+  }
+  return out as T;
+}

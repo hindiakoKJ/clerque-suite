@@ -82,6 +82,9 @@ function makeLedgerNavItem(
   };
 }
 
+/** Why an advanced-ledger screen is locked. Simple books is a free switch in Settings, so never say "upgrade". */
+const FULL_BOOKS_LOCK = 'Switch the books to Full in Settings > Ledger mode (the owner does this), then sign out and in';
+
 export default function LedgerLayout({ children }: { children: React.ReactNode }) {
   const router         = useRouter();
   const { user, clear } = useAuthStore();
@@ -104,6 +107,8 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
   useEffect(() => { setHydrated(true); }, []);
   const isBirRegistered = user?.isBirRegistered ?? false;
   const isFullLedger   = user?.planFeatures?.advancedAccounting ?? false;
+  // Simple books is the owner's own switch, not a paid tier: saying "upgrade" sent shops
+  // looking for a bill to pay. Settings > Ledger mode turns it on, and only the owner can.
   // Magnet Books — SIMPLE is an owner *choice*, not a plan lock: hide the
   // full-accounting items outright so a non-accountant sees a clean 5-item
   // ledger. FULL/undefined with advancedAccounting=false is a genuine plan
@@ -161,38 +166,38 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
 
     // ── Receivables (sub-ledger) ────────────────────────────────────────────
     makeLedgerNavItem('/ledger/ar/quotes',     'Quotes',             FileSignature,   AR_ROLES,         role,
-      { sectionStart: 'Receivables', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { sectionStart: 'Receivables', extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     // Sprint 21 — clearer labels. Flow is Customer → Quote → Invoice →
     // Payment. "Customer Billing" was ambiguous; renamed to "Invoices"
     // which matches what people actually click for. POS-derived AR keeps
     // the POS-collections lens but with a label that says what it IS.
     makeLedgerNavItem('/ledger/ar/billing',    'Invoices',           FileSpreadsheet, AR_ROLES,         role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/ar/invoices',   'POS-derived AR',     TrendingUp,      AR_ROLES,         role),
     makeLedgerNavItem('/ledger/ar/advances',   'Customer Advances',  Wallet,          AR_ROLES,         role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     // The Customers screen had NO nav entry. Its only link was inside a
     // dismissible banner on the invoices page, so once someone closed that
     // banner the screen was unreachable -- and with it the ability to add the
     // customer an invoice needs.
     makeLedgerNavItem('/ledger/ar/customers',  'Customers',          Users,           AR_ROLES,         role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
 
     // ── Payables (sub-ledger) ───────────────────────────────────────────────
     makeLedgerNavItem('/ledger/ap/bills',      'Vendor Bills',       Receipt,         AP_ROLES,         role,
-      { sectionStart: 'Payables', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { sectionStart: 'Payables', extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/ap/expenses',   'Expense Claims',     TrendingDown,    AP_ROLES,         role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/ap/advances',   'Vendor Advances',    Wallet,          AP_ROLES,         role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     // Vendors had no nav entry either. On a fresh tenant the vendor dropdown
     // on a new bill is empty, validation refuses to save without one, and the
     // screen that creates vendors could not be opened -- so the FIRST vendor
     // bill could never be recorded at all.
     makeLedgerNavItem('/ledger/ap/vendors',    'Vendors',            Building2,       AP_ROLES,         role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/expense-approvals', 'Expense Approvals', ClipboardCheck, EXPENSE_APPROVAL_ROLES, role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
 
     // ── Cash & Bank ─────────────────────────────────────────────────────────
     // Record Entry — SIMPLE tier (no lock): log non-till expenses, owner cash,
@@ -201,32 +206,32 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
       { sectionStart: 'Cash & Bank' }),
     makeLedgerNavItem('/ledger/settlement',    'Settlement',         Banknote,        SETTLEMENT_ROLES, role),
     makeLedgerNavItem('/ledger/bank-recon',    'Bank Reconciliation', Landmark,       PERIODS_ROLES,    role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
 
     // ── General Ledger ──────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/accounts',      'Chart of Accounts',  ListOrdered,     ACCOUNTS_ROLES,   role,
-      { sectionStart: 'General Ledger', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { sectionStart: 'General Ledger', extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/journal',       'Journal Entries',    BookMarked,      JOURNAL_ROLES,    role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/events',        'Event Queue',        Zap,             EVENT_ROLES,      role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
 
     // ── Period Close & Reports ──────────────────────────────────────────────
     makeLedgerNavItem('/ledger/periods',         'Accounting Periods', CalendarClock,   PERIODS_ROLES,    role,
-      { sectionStart: 'Period & Reports', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { sectionStart: 'Period & Reports', extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/trial-balance',   'Trial Balance',      Scale,           TRIAL_BAL_ROLES,  role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/pl-statement',    'Income Statement',   BarChart3,       PERIODS_ROLES,    role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/balance-sheet',   'Balance Sheet',      Scale,           TRIAL_BAL_ROLES,  role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     makeLedgerNavItem('/ledger/cash-flow',       'Cash Flow Statement', BarChart3,      PERIODS_ROLES,    role,
-      { extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
     // Two different locks, two different reasons: a shop already on full
     // accounting but not BIR-registered was being told to "upgrade".
     makeLedgerNavItem('/ledger/bir',             'Tax Estimation',     FileText,        BIR_ROLES,        role,
       { extraCondition: isFullLedger && isBirRegistered,
-        lockedReason: isFullLedger ? undefined : 'Upgrade to full accounting to unlock this' }),
+        lockedReason: isFullLedger ? undefined : FULL_BOOKS_LOCK }),
 
     // ── Reports hub (Sprint 21) ─────────────────────────────────────────────
     // Single entry point for every exportable XLSX report across the Ledger.
@@ -236,11 +241,11 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
 
     // ── Audit ───────────────────────────────────────────────────────────────
     makeLedgerNavItem('/ledger/audit',         'Audit Log',          ShieldCheck,     AUDIT_ROLES,      role,
-      { sectionStart: 'Audit', extraCondition: isFullLedger, lockedReason: 'Upgrade to full accounting to unlock this' }),
+      { sectionStart: 'Audit', extraCondition: isFullLedger, lockedReason: FULL_BOOKS_LOCK }),
   ].reduce<{ items: NavItem[]; pending?: string }>((acc, item) => {
     const visible = !item.disabled
       || item.disabledReason?.startsWith('Requires')
-      || (!isSimpleBooks && item.disabledReason === 'Upgrade to full accounting to unlock this');
+      || (!isSimpleBooks && item.disabledReason === FULL_BOOKS_LOCK);
     // When the item that *carries* a section header is hidden (SIMPLE mode, or
     // a role that can't see it), hand the header to the next visible item in
     // that same section — otherwise POS-derived AR lands under "Overview" and

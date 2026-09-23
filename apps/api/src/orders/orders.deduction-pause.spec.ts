@@ -124,7 +124,7 @@ describe('OrdersService — ingredient deduction pause', () => {
     const prisma: any = {
       // The order carries a shiftId now — a POS cash sale needs a drawer to
       // put the money in — so the ownership check runs.
-      shift: { count: jest.fn().mockResolvedValue(1) },
+      shift: { count: jest.fn().mockResolvedValue(1), findFirst: jest.fn().mockResolvedValue({ cashierId: null, closedAt: null }) },
       order: { findFirst: jest.fn().mockResolvedValue(null) },
       tenant: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ taxStatus: 'VAT', planCode: 'CLERQUE', isPtuHolder: false }),

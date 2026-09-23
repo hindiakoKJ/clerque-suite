@@ -172,11 +172,10 @@ Old API + new web = 404s on the POS; new API + old web is harmless.
       dropped), `SENTRY_DSN`,
       R2/S3 upload vars (see INFRA_SETUP.md — Railway disk is wiped on
       every deploy, so logo/product images must be on R2 before go-live).
-      AI (optional, currently OFF): switch on `AI_FEATURES_ENABLED=true`,
-      `AI_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` TOGETHER, or leave
-      all three unset. `AI_FEATURES_ENABLED=true` alone routes every AI
-      call to Gemini, which has no Google project on Railway, and every
-      receipt scan returns 503.
+      AI (optional, currently OFF): see **Turning AI on** below. Switch
+      the variables on TOGETHER or leave them all unset —
+      `AI_FEATURES_ENABLED=true` on its own makes every AI button return
+      503.
 - [ ] **Postgres backups** — Railway → Postgres → Backups: enabled, AND
       at least one snapshot is listed there (the toggle alone proves
       nothing). Until the R2/S3 vars above are set, the API's own
@@ -343,3 +342,101 @@ Same decision, smaller: the day reports filter orders on
 (hand-written, and the only statement in its migration file, because
 Postgres refuses `CONCURRENTLY` inside a multi-statement script — or a
 plain `CREATE INDEX` while the table is still small).
+
+---
+
+## 7. Turning AI on — Gemini on Vertex (optional, currently OFF)
+
+AI is switched off on every deployment today. Nothing below is needed to
+run the shop; it is needed the day you want the receipt scanner, the
+journal drafter and the journal guide to work.
+
+The provider is **Gemini on Vertex AI**, which is first-party Google
+Cloud and therefore the only AI the Google for Startups credits can pay
+for. It is deliberately NOT the free Gemini API key from AI Studio: that
+tier trains on what you send it, and what Clerque sends it is a
+photograph of a paying client's receipt — their suppliers, their prices,
+their volumes.
+
+### 7a. In the Google Cloud console, once (≈15 min)
+
+Do these in order. Each one is a different way for the first call to
+fail if it is skipped.
+
+1. **Billing → link the credits.** Billing → the project → *Link a
+   billing account* → the account holding the Google for Startups
+   credits. Vertex refuses unbilled projects with a 403 that talks
+   about billing, not about credits.
+2. **Enable the API.** APIs & Services → *Enable APIs and services* →
+   search "Vertex AI API" → **Enable**. Without this every call is a
+   403 saying the API has not been used in the project.
+3. **Create the service account.** IAM & Admin → Service accounts →
+   *Create service account*.
+   - Name: `clerque-vertex`
+   - Role: **Vertex AI User** (`roles/aiplatform.user`) — and nothing
+     wider. It is the smallest role that can call a model.
+4. **Create its key.** The new service account → **Keys** → *Add key* →
+   *Create new key* → **JSON** → Create. The file downloads once and
+   Google keeps no copy.
+5. **Note the project id** printed in the key file as `project_id` —
+   the id, not the display name.
+
+Treat the downloaded file like a password: it is a standing grant of
+Vertex on that project. Paste it into Railway (below), then delete the
+download.
+
+### 7b. On Railway → the API service → Variables
+
+| Variable | Value | What it does |
+| --- | --- | --- |
+| `AI_FEATURES_ENABLED` | `true` | The master switch. Anything but the exact string `true` leaves AI off, so a typo fails closed. |
+| `AI_PROVIDER` | `gemini` | Who does the reading. `anthropic` is the other option and needs `ANTHROPIC_API_KEY` instead. |
+| `GOOGLE_CREDENTIALS_JSON` | the whole key file from 7a.4, **or** that file base64-encoded | How Vertex signs its requests. |
+| `GOOGLE_CLOUD_LOCATION` | `us-central1` | The region. Optional — this is the default. |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Optional — this is the default. Set it the day Google retires 3.8 Flash. |
+| `GOOGLE_CLOUD_PROJECT` | the project id | Optional. The key file already names its project; set this only to point at a different one. |
+
+Then **Restart** the service (variables are read at boot).
+
+**Base64 is the safer paste.** The key file is several lines long and
+contains a private key whose newlines a dashboard field can flatten or
+escape — which Google answers with a signature error that names nothing.
+Base64 makes it one unbroken line:
+
+```
+base64 -w0 key.json            # macOS/Linux
+certutil -encode key.json key.b64   # Windows, then delete the first and last lines
+```
+
+Both forms are accepted, and the common paste damage (escaped newlines,
+flattened newlines, a wrapping pair of quotes) is repaired on the way in.
+
+### 7c. Check it worked
+
+- **Railway → Deploy logs, right after the restart.** Silence is
+  success. If any of these appear, AI will return 503 until it is
+  fixed — each names the variable to set:
+  - `AI_PROVIDER=gemini but GOOGLE_CREDENTIALS_JSON could not be read`
+    — the paste was damaged. Re-paste as base64.
+  - `... no GOOGLE_CREDENTIALS_JSON and no GOOGLE_APPLICATION_CREDENTIALS`
+    — the variable is missing. Railway has no credentials file and no
+    metadata server, so there is nothing for Vertex to sign with.
+  - `AI_PROVIDER=gemini but no Google project is set` — neither
+    `GOOGLE_CLOUD_PROJECT` nor a key file naming one.
+  The key itself never appears in a log line, on any of these paths.
+- **In the app**: Procure → Upload a receipt → a photo of any receipt.
+  It should come back with the supplier, date and line items filled in.
+  A 503 with "AI service is not configured" means the boot log above
+  has the answer. A 403 about the monthly budget means it worked and
+  the tenant's cap is set too low (`AI_MONTHLY_BUDGET_USD`).
+- **Spend**: Console → the tenant → AI usage. Every call is logged with
+  its token counts and estimated cost, and a tenant that passes
+  `AI_MONTHLY_BUDGET_USD` is refused rather than billed.
+
+### 7d. Turning it off again
+
+Set `AI_FEATURES_ENABLED=false` and restart. That one variable stops
+every path — the HTTP routes, the internal callers, and the AI buttons
+in the web and Counter apps, which hide themselves when the quota in
+the JWT is zero. Nothing needs to be un-configured and no credits are
+consumed while it is off.

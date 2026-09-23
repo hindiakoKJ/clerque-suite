@@ -34,7 +34,7 @@ export class AuditController {
       page:       page ? parseInt(page, 10) : 1,
       action:     action as AuditAction | undefined,
       entityType: entityType ?? undefined,
-    });
+    }, user.role);
   }
 
   /**

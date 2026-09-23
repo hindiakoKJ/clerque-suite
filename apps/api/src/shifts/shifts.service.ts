@@ -563,6 +563,28 @@ ${line}` : line },
       if (!dto.approvedById) {
         throw new ForbiddenException('Cash drops require manager confirmation.');
       }
+      /*
+        The same lookup the paid-out branch makes. This one only checked that
+        SOME id was present, so any string -- the cashier's own id included --
+        counted as a manager's say-so, and cash left the drawer for the safe
+        on nobody's word but hers.
+      */
+      const approver = await this.prisma.user.findFirst({
+        where: {
+          id:       dto.approvedById,
+          tenantId,
+          isActive: true,
+          role:     { in: ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'] },
+        },
+        select: { id: true },
+      });
+      if (!approver) {
+        throw new ForbiddenException('Approver must be an active manager in your organization.');
+      }
+    }
+    // Whoever approves, it is never the person taking the cash out.
+    if (dto.approvedById && dto.approvedById === cashierId) {
+      throw new ForbiddenException('You cannot approve your own cash-out. Ask a manager.');
     }
 
     // Atomic cash-out + JE event in one transaction. PAID_OUT events post a
@@ -585,6 +607,27 @@ ${line}` : line },
           approvedById:    dto.approvedById,
           aiAssisted:      dto.aiAssisted ?? false,
         },
+      });
+
+      // Cash leaving the drawer is written to the trail with who took it and
+      // who signed, so a dispute at close has an answer. Awaited: a trail that
+      // cannot be written is a reason not to move the cash.
+      await this.audit.log({
+        tenantId,
+        action:      'SETTING_CHANGED',
+        entityType:  'SHIFT_CASH_OUT',
+        entityId:    cashOut.id,
+        description: `${dto.type === 'CASH_DROP' ? 'Cash drop' : 'Paid out'} ₱${Number(dto.amount).toFixed(2)} — ${dto.reason}`,
+        after: {
+          shiftId,
+          type:         dto.type,
+          amount:       Number(dto.amount),
+          reason:       dto.reason,
+          category:     dto.category ?? null,
+          createdById:  cashierId,
+          approvedById: dto.approvedById ?? null,
+        },
+        performedBy: cashierId,
       });
 
       if (dto.type === 'PAID_OUT') {
@@ -638,6 +681,26 @@ ${line}` : line },
     if (!isOwnRecord && !canManage) {
       throw new ForbiddenException('Only the recording cashier or a manager can remove a cash-out.');
     }
+    // The row is about to vanish, so the trail keeps what it said and who
+    // removed it. Awaited before the delete for the same reason as above.
+    await this.audit.log({
+      tenantId,
+      action:      'VOID_PROCESSED',
+      entityType:  'SHIFT_CASH_OUT',
+      entityId:    cashOutId,
+      description: `Removed ${cashOut.type === 'CASH_DROP' ? 'cash drop' : 'paid out'} ₱${Number(cashOut.amount).toFixed(2)} — ${cashOut.reason}`,
+      before: {
+        shiftId,
+        type:         cashOut.type,
+        amount:       Number(cashOut.amount),
+        reason:       cashOut.reason,
+        category:     cashOut.category ?? null,
+        createdById:  cashOut.createdById,
+        approvedById: cashOut.approvedById ?? null,
+        createdAt:    cashOut.createdAt,
+      },
+      performedBy: callerId,
+    });
     await this.prisma.shiftCashOut.delete({ where: { id: cashOutId } });
   }
 

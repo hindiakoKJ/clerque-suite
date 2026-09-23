@@ -9,6 +9,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditAction } from '@prisma/client';
+import { hasPermission } from '@repo/shared-types';
 
 /**
  * Normalised audit entry returned by AuditService.findAll().
@@ -175,8 +176,19 @@ export class AuditService {
    * raw email is preserved in the underlying ConsoleLog record (only super-
    * admins can see it via the Console).
    */
-  async findAll(tenantId: string, opts: { page?: number; action?: AuditAction; entityType?: string }) {
+  async findAll(
+    tenantId: string,
+    opts: { page?: number; action?: AuditAction; entityType?: string },
+    callerRole?: string | null,
+  ) {
     const { page = 1, action, entityType } = opts;
+    /*
+      The trail is readable by roles that may not see pay (a finance lead,
+      an outside auditor), and a SALARY_CHANGED row carries the old and new
+      rate. The description already says who changed, without the figures;
+      the figures go only to someone who could open payroll anyway.
+    */
+    const canViewSalary = hasPermission(callerRole ?? '', 'payroll:view_salary');
     const take = 50;
     const skip = (page - 1) * take;
 
@@ -228,8 +240,8 @@ export class AuditService {
         action:      r.action,
         entityType:  r.entityType,
         entityId:    r.entityId,
-        before:      r.before,
-        after:       r.after,
+        before:      r.action === 'SALARY_CHANGED' && !canViewSalary ? null : r.before,
+        after:       r.action === 'SALARY_CHANGED' && !canViewSalary ? null : r.after,
         description: r.description,
         performedBy: r.performedBy,
         ipAddress:   r.ipAddress,

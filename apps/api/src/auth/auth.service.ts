@@ -27,7 +27,13 @@ import { receiptBusinessName } from './receipt-business-name';
 // Refresh-token rotation still happens silently in the background via the
 // axios refresh interceptor, so security posture is unchanged.
 const ACCESS_EXPIRY = '8h';
-const REFRESH_EXPIRY = '30d';
+// 7 days. A refresh token is stored as a bcrypt hash, which means a stolen one
+// cannot be picked out and revoked on its own (sign-out revokes whichever
+// session matches first). Until sessions are bound to their token, the
+// only limit on a copied token is its life, so it is a week, not a month:
+// staff sign in each shift anyway, and the owner signs in again weekly.
+const REFRESH_EXPIRY = '7d';
+const REFRESH_DAYS = 7;
 
 @Injectable()
 export class AuthService {
@@ -810,8 +816,8 @@ export class AuthService {
     );
 
     const refreshHash = await bcrypt.hash(refreshToken, 10);
-    // Match REFRESH_EXPIRY ('30d') so the DB record and the JWT expire together.
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    // Match REFRESH_EXPIRY so the DB record and the JWT expire together.
+    const expiresAt = new Date(Date.now() + REFRESH_DAYS * 24 * 60 * 60 * 1000);
 
     await this.prisma.userSession.create({
       data: {

@@ -30,7 +30,7 @@ import { JwtPayload } from '@repo/shared-types';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { StorageService } from '../storage/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { purchaseCostsVisibleTo } from '../procure/cost-visibility';
+import { purchaseCostsVisibleTo, withoutCosts } from '../procure/cost-visibility';
 import { ProductsService, CreateProductDto, UpdateProductDto } from './products.service';
 import { SuperAdminGuard } from '../admin/admin.guard';
 
@@ -50,16 +50,23 @@ export class ProductsController {
   ) {}
 
   @Get()
-  findAll(
+  async findAll(
     @CurrentUser() user: JwtPayload,
     @Query('includeInactive') includeInactive?: string,
     @Query('branchId') branchId?: string,
   ) {
-    return this.productsService.findAll(
+    const rows = await this.productsService.findAll(
       user.tenantId!,
       includeInactive === 'true',
       branchId ?? user.branchId ?? undefined,
     );
+    /*
+      The same switch the till honours below. This list and the detail route
+      carried every make-cost and, through the recipe, every ingredient's
+      buying price to any signed-in account -- the cashier's browser loads it
+      on an ordinary shift -- while the shop believed the switch hid them.
+    */
+    return (await purchaseCostsVisibleTo(this.prisma, user.tenantId!, user.role)) ? rows : withoutCosts(rows);
   }
 
   @Get('pos')
@@ -86,8 +93,9 @@ export class ProductsController {
 
   /** Barcode scanner integration — GET /products/barcode/:barcode */
   @Get('barcode/:barcode')
-  findByBarcode(@CurrentUser() user: JwtPayload, @Param('barcode') barcode: string) {
-    return this.productsService.findByBarcode(user.tenantId!, barcode);
+  async findByBarcode(@CurrentUser() user: JwtPayload, @Param('barcode') barcode: string) {
+    const row = await this.productsService.findByBarcode(user.tenantId!, barcode);
+    return (await purchaseCostsVisibleTo(this.prisma, user.tenantId!, user.role)) ? row : withoutCosts(row);
   }
 
   /**
@@ -101,8 +109,10 @@ export class ProductsController {
   }
 
   @Get(':id')
-  findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.productsService.findOne(user.tenantId!, id);
+  async findOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    const row = await this.productsService.findOne(user.tenantId!, id);
+    // The recipe on this one names each ingredient's purchase price: the supplier price list.
+    return (await purchaseCostsVisibleTo(this.prisma, user.tenantId!, user.role)) ? row : withoutCosts(row);
   }
 
   // Master data writes: MDM and OWNER (SOD — no other roles may create products)

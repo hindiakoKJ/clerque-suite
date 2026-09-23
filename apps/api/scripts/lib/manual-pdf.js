@@ -118,6 +118,14 @@ function createDoc({ title, subtitle, footer, outPath }) {
     doc.fillColor(C.ink).font(F.r).fontSize(9.5).text(body, 66, y + 8 + th, { width: W - 24, lineGap: 1.5 });
     doc.y = y + h + 10; left();
   };
+  /**
+   * Same box, with a label of your own — e.g. m.callout('START HERE', '...').
+   * tone: 'tip' | 'care' | 'stop' | 'note' (default 'note').
+   */
+  m.callout = (label, body, tone) => {
+    const t = { tip: [C.tipBg, C.tipFg], care: [C.careBg, C.careFg], stop: [C.stopBg, C.stopFg], note: [C.noteBg, C.noteFg] }[tone || 'note'];
+    box(label, body, t[0], t[1]);
+  };
   m.tip     = (body) => box('TIP', body, C.tipBg, C.tipFg);
   m.careful = (body) => box('BE CAREFUL', body, C.careBg, C.careFg);
   m.stop    = (body) => box('DO NOT', body, C.stopBg, C.stopFg);
@@ -135,7 +143,16 @@ function createDoc({ title, subtitle, footer, outPath }) {
     };
     header();
     rows.forEach((r, ri) => {
-      const hs = r.map((c, i) => doc.font(F.r).fontSize(8.5).heightOfString(String(c).replace(/^\*\*/, ''), { width: colW[i] - 8 }));
+      // Measure with the SAME font the cell will be drawn in. Measuring a '**'
+      // cell in the regular face under-reports its height — bold Arial is wider,
+      // so a label that fits one line when measured wraps to two when drawn and
+      // spills into the next row. Seen on "Load sizes and add-ons from a
+      // spreadsheet" in the role guides.
+      const hs = r.map((c, i) => {
+        const s = String(c);
+        return doc.font(s.startsWith('**') ? F.b : F.r).fontSize(8.5)
+          .heightOfString(s.replace(/^\*\*/, ''), { width: colW[i] - 8 });
+      });
       const rh = Math.max(...hs) + 9;
       if (y + rh > bottom()) { doc.addPage(); y = 56; header(); }
       if (ri % 2 === 0) doc.rect(54, y, W, rh).fill(C.zebra);

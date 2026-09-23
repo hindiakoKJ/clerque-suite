@@ -254,7 +254,10 @@ export class TenantService {
       where: {
         tenantId,
         createdAt: { gte: startOfMonth },
-        action:    { in: ['journal_drafter', 'journal_guide', 'receipt_ocr'] },
+        // The same four the quota guard counts (ai-quota.guard.ts). Leaving the Procure
+        // receipt reader out made this meter read near zero for a cafe — almost all of
+        // its AI use — right up to the morning every AI button said the month was gone.
+        action:    { in: ['journal_drafter', 'journal_guide', 'receipt_ocr', 'procure_receipt_lines'] },
       },
     });
 

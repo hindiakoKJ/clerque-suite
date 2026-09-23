@@ -1,5 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { toGeminiContents, callGemini } from './gemini.provider';
+import {
+  toGeminiContents,
+  callGemini,
+  thinkingConfigFor,
+  outputTokenCeiling,
+  usesThinkingLevel,
+} from './gemini.provider';
 
 /**
  * Four features speak Anthropic's message shape. Rather than rewrite them all
@@ -98,24 +104,25 @@ describe('callGemini — what comes back', () => {
     });
   });
 
-  /*
-    Flash thinks by default, and thinking comes out of the SAME allowance as
-    the answer — so a small maxOutputTokens can be spent entirely on thought,
-    and `.text` skips thought parts. The result is an empty string that reads
-    exactly like an unreadable photo, and the receipt screen would tell the
-    person to re-shoot a picture that was perfectly good.
-  */
-  it('asks for no thinking, because every job here is extraction', async () => {
+  it('asks the model on duty for as little thinking as it will accept', async () => {
     const { client: c, generateContent } = client({ text: 'x' });
-    await callGemini(c, { model: 'm', messages: [] });
+    await callGemini(c, { model: 'gemini-3.8-flash', messages: [] });
     expect(generateContent.mock.calls[0][0].config.thinkingConfig)
-      .toEqual({ thinkingBudget: 0, includeThoughts: false });
+      .toEqual({ thinkingLevel: 'LOW', includeThoughts: false });
   });
 
   it('treats an empty answer as a failed call, and says why', async () => {
     const { client: c } = client({ candidates: [{ finishReason: 'MAX_TOKENS' }] });
-    await expect(callGemini(c, { model: 'm', messages: [], maxTokens: 400 }))
+    await expect(callGemini(c, { model: 'gemini-2.5-flash', messages: [], maxTokens: 400 }))
       .rejects.toThrow(/no usable text.*MAX_TOKENS.*400/s);
+  });
+
+  it('reports the ceiling it actually sent, not the one it was asked for', async () => {
+    const { client: c } = client({ candidates: [{ finishReason: 'MAX_TOKENS' }] });
+    // A thinking model's 400 was raised to the floor; saying "400" would send
+    // whoever reads the log looking for a setting that is not in force.
+    await expect(callGemini(c, { model: 'gemini-3.8-flash', messages: [], maxTokens: 400 }))
+      .rejects.toThrow(/maxOutputTokens=2048/);
   });
 
   it('counts thinking tokens as output, because Google bills them that way', async () => {
@@ -131,7 +138,111 @@ describe('callGemini — what comes back', () => {
 
   it('leaves the system instruction out entirely when there is none', async () => {
     const { client: c, generateContent } = client({ text: 'x' });
-    await callGemini(c, { model: 'm', messages: [] });
+    await callGemini(c, { model: 'gemini-3.8-flash', messages: [] });
     expect(generateContent.mock.calls[0][0].config).not.toHaveProperty('systemInstruction');
+  });
+});
+
+/**
+ * The two generations of Flash disagree about thinking, and getting it wrong
+ * is not a degraded answer — it is a rejected request.
+ *
+ *   Gemini 2.5 takes `thinkingBudget`, a token count, and 0 means OFF.
+ *   Gemini 3 takes `thinkingLevel` and cannot be switched off at all. LOW is
+ *   the floor on 3.x Flash: "MINIMAL" is in the SDK but 3.8 Flash rejects it
+ *   outright, and sending both fields together is an error too.
+ *
+ * So the shape follows the model id. This is pinned because the failure is
+ * invisible in review and total in production: every AI button, 503, at once.
+ */
+describe('Thinking, in the shape the model on duty accepts', () => {
+  it.each([
+    ['gemini-3.8-flash',    true],
+    ['gemini-3.5-flash',    true],
+    ['gemini-3-flash',      true],
+    ['gemini-2.5-flash',    false],
+    ['gemini-2.0-flash',    false],
+    ['gemini-flash-latest', true],   // unreadable id — assume the new generation
+  ])('%s', (model, expectsLevel) => {
+    expect(usesThinkingLevel(model)).toBe(expectsLevel);
+  });
+
+  it('sends thinkingLevel to Gemini 3, and never a budget alongside it', () => {
+    const config = thinkingConfigFor('gemini-3.8-flash');
+    expect(config).toEqual({ thinkingLevel: 'LOW', includeThoughts: false });
+    expect(config).not.toHaveProperty('thinkingBudget');
+  });
+
+  it('still sends a budget of zero to Gemini 2.5, where thinking CAN be turned off', () => {
+    const config = thinkingConfigFor('gemini-2.5-flash');
+    expect(config).toEqual({ thinkingBudget: 0, includeThoughts: false });
+    expect(config).not.toHaveProperty('thinkingLevel');
+  });
+});
+
+/**
+ * Gemini 3 cannot stop thinking, and maxOutputTokens is a hard cutoff that
+ * counts thought tokens. The receipt route asks for 400 — which a thinking
+ * model would spend entirely on thought, returning an empty string that reads
+ * exactly like an unreadable photo. The cashier would then be told to re-shoot
+ * a picture that was perfectly good.
+ *
+ * Raising a CEILING costs nothing: Google bills tokens produced, not tokens
+ * allowed. So this is headroom, not spend.
+ */
+describe('The output allowance leaves room for the thinking we cannot turn off', () => {
+  it('floors a thinking model at 2048, whatever the caller asked for', () => {
+    expect(outputTokenCeiling('gemini-3.8-flash', 400)).toBe(2048);
+  });
+
+  it('never lowers what the caller asked for', () => {
+    expect(outputTokenCeiling('gemini-3.8-flash', 2500)).toBe(2500);
+  });
+
+  it('leaves a non-thinking model exactly as asked', () => {
+    expect(outputTokenCeiling('gemini-2.5-flash', 400)).toBe(400);
+  });
+
+  it('falls back to the same default as the Anthropic path when nothing is asked', () => {
+    expect(outputTokenCeiling('gemini-2.5-flash', undefined)).toBe(1024);
+  });
+});
+
+/**
+ * Emptying a box in the Railway dashboard is how anybody says "go back to the
+ * default". It does not unset the variable — it leaves an empty string — and
+ * an empty string is not a missing thinkingLevel to Vertex, it is an invalid
+ * enum. The request is rejected before a token is generated, so the whole app
+ * answers 503 and the cause is a field somebody cleared on purpose.
+ *
+ * The settings are read at import, so each case loads the module fresh.
+ */
+describe('A thinking level that was cleared, not chosen', () => {
+  const OLD_ENV = process.env;
+
+  afterEach(() => { process.env = OLD_ENV; jest.resetModules(); });
+
+  /** The level a fresh copy of the module would send for Gemini 3. */
+  function levelFor(value: string | undefined): string | undefined {
+    jest.resetModules();
+    process.env = { ...OLD_ENV, GEMINI_THINKING_LEVEL: value };
+    const fresh = require('./gemini.provider') as typeof import('./gemini.provider');
+    return (fresh.thinkingConfigFor('gemini-3.8-flash') as { thinkingLevel?: string }).thinkingLevel;
+  }
+
+  it.each([
+    ['unset',             undefined, 'LOW'],
+    ['cleared',           '',        'LOW'],
+    ['cleared to spaces', '   ',     'LOW'],
+    ['chosen',            'medium',  'MEDIUM'],
+    ['chosen, padded',    ' high ',  'HIGH'],
+  ])('%s -> %s', (_name, value, expected) => {
+    expect(levelFor(value)).toBe(expected);
+  });
+
+  it('never sends an empty level, whatever the variable holds', () => {
+    for (const value of [undefined, '', ' ', '\t', '\n']) {
+      expect(levelFor(value)).toBeTruthy();
+    }
   });
 });

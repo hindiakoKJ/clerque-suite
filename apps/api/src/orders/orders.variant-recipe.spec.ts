@@ -94,7 +94,7 @@ describe('OrdersService.create — variant recipes', () => {
     };
 
     const prisma: any = {
-      shift: { count: jest.fn().mockResolvedValue(1) },
+      shift: { count: jest.fn().mockResolvedValue(1), findFirst: jest.fn().mockResolvedValue({ cashierId: null, closedAt: null }) },
       order: { findFirst: jest.fn().mockResolvedValue(null) },
       tenant: {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ taxStatus: 'VAT', planCode: 'CLERQUE', isPtuHolder: false }),

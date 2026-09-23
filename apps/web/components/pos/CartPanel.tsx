@@ -215,9 +215,12 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
                   <Percent className="h-3 w-3" />
                   {orderDiscount.label}
                 </span>
-                <button onClick={removeOrderDiscount} aria-label="Remove discount" className="text-muted-foreground/40 hover:text-red-500">
-                  <Trash2 className="h-3 w-3" />
-                </button>
+                {/* Same rule as applying one: a discount a supervisor put on is not a cashier's to take off. */}
+                {canDiscount && (
+                  <button onClick={removeOrderDiscount} aria-label="Remove discount" className="text-muted-foreground/40 hover:text-red-500">
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                )}
               </div>
               <div className="bg-amber-500/10 rounded-lg px-2.5 py-2 space-y-1 text-[11px]">
                 <div className="flex justify-between text-muted-foreground">

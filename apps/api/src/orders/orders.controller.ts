@@ -57,6 +57,11 @@ interface CreateOrderBody {
    * because a later sale had used the last of the milk.
    */
   replayedOffline?: boolean;
+  /**
+   * A supervisor's PIN when the caller may not grant a discount alone: the
+   * same dual-authorization as a void. Checked in the service.
+   */
+  supervisorPin?: string;
 }
 
 interface VoidOrderBody {
@@ -237,6 +242,7 @@ export class OrdersController {
         // totals are authoritative and the role check does not apply.
         callerRole:              service ? null : user.role,
         callerCustomPermissions: service ? null : user.customPermissions,
+        supervisorPin:           service ? undefined : body.supervisorPin,
       },
     );
   }

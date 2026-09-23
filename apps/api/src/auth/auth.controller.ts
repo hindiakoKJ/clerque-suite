@@ -227,6 +227,7 @@ export class AuthController {
    * here tightens it to 5 signups per 10 minutes per IP — enough for a
    * legit business to retry on slug collisions, not enough for a bot farm.
    */
+  @Throttle({ short: { ttl: 600_000, limit: 5 } })
   @Post('signup-ledger')
   @HttpCode(HttpStatus.CREATED)
   async signupLedger(@Body() body: {
@@ -246,6 +247,7 @@ export class AuthController {
    * Returns { tenantSlug, referenceCode } so the frontend can redirect to
    * /pay/<referenceCode> for payment instructions.
    */
+  @Throttle({ short: { ttl: 600_000, limit: 5 } })
   @Post('signup-pos')
   @HttpCode(HttpStatus.CREATED)
   async signupPos(@Body() body: {

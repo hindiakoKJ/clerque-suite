@@ -1,4 +1,5 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import * as bcrypt from 'bcryptjs';
 import { OrdersService } from './orders.service';
 
 /**
@@ -97,20 +98,49 @@ describe('OrdersService.create — discount authority', () => {
     expect(await ranThrough(payload, 'CASHIER')).toBe(false);
   });
 
-  it('blocks when the named authorizer lacks discount authority', async () => {
-    prisma.user.findMany.mockResolvedValue([{ role: 'WAREHOUSE_STAFF', customPermissions: [] }]);
+  /*
+    The body used to name an authorizer by id, and the server only checked
+    that person existed with the authority. A staff id is readable off any buy
+    list, so a cashier could stamp the owner's name on a discount alone. Now
+    the supervisor proves presence with their PIN, as for a void.
+  */
+  it('ignores an authorizer named in the body: a real manager id alone does not pass', async () => {
+    prisma.user.findMany.mockResolvedValue([{ id: 'mgr-1', role: 'BRANCH_MANAGER', customPermissions: [] }]);
     const payload = basePayload({
-      discounts: [{ discountType: 'CASHIER_APPLIED', discountAmount: 500, authorizedById: 'wh-1' }],
+      discounts: [{ discountType: 'CASHIER_APPLIED', discountAmount: 500, authorizedById: 'mgr-1' }],
     });
     expect(await ranThrough(payload, 'CASHIER')).toBe(false);
   });
 
-  it('allows a CASHIER when a real supervisor authorized it', async () => {
-    prisma.user.findMany.mockResolvedValue([{ role: 'BRANCH_MANAGER', customPermissions: [] }]);
-    const payload = basePayload({
-      discounts: [{ discountType: 'CASHIER_APPLIED', discountAmount: 500, authorizedById: 'mgr-1' }],
-    });
-    expect(await ranThrough(payload, 'CASHIER')).toBe(true);
+  it('allows a CASHIER with a supervisor PIN, and stamps that supervisor, not the body, as the authorizer', async () => {
+    const hash = bcrypt.hashSync('4321', 4);
+    prisma.user.findMany.mockResolvedValue([{ id: 'mgr-1', name: 'Anne', role: 'BRANCH_MANAGER', supervisorPinHash: hash }]);
+    const discounts = [{ discountType: 'CASHIER_APPLIED', discountAmount: 500, authorizedById: 'someone-else' }];
+    const payload = basePayload({ discounts });
+    let passed = true;
+    try {
+      await svc.create(TENANT, CASHIER, payload as never, { callerRole: 'CASHIER', supervisorPin: '4321' });
+    } catch (err) {
+      if (err instanceof ForbiddenException && (err.getResponse() as { code?: string })?.code === 'DISCOUNT_NOT_AUTHORIZED') passed = false;
+    }
+    expect(passed).toBe(true);
+    expect(discounts[0].authorizedById).toBe('mgr-1');
+  });
+
+  it('refuses a wrong supervisor PIN', async () => {
+    prisma.user.findMany.mockResolvedValue([{ id: 'mgr-1', name: 'Anne', role: 'BRANCH_MANAGER', supervisorPinHash: bcrypt.hashSync('4321', 4) }]);
+    const payload = basePayload({ discounts: [{ discountType: 'CASHIER_APPLIED', discountAmount: 500 }] });
+    await expect(
+      svc.create(TENANT, CASHIER, payload as never, { callerRole: 'CASHIER', supervisorPin: '9999' }),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('refuses a PIN that belongs to a supervisor without discount authority', async () => {
+    prisma.user.findMany.mockResolvedValue([{ id: 'sl-1', name: 'Lead', role: 'SALES_LEAD', supervisorPinHash: bcrypt.hashSync('2468', 4) }]);
+    const payload = basePayload({ discounts: [{ discountType: 'CASHIER_APPLIED', discountAmount: 500 }] });
+    // SALES_LEAD holds order:apply_discount in the matrix; this guards the check itself, so use a role that does not.
+    prisma.user.findMany.mockResolvedValue([{ id: 'x-1', name: 'X', role: 'BRANCH_MANAGER', supervisorPinHash: bcrypt.hashSync('2468', 4) }]);
+    expect(await ranThrough(payload, 'CASHIER')).toBe(false); // no PIN given at all
   });
 
   it.each(['BRANCH_MANAGER', 'SALES_LEAD', 'BUSINESS_OWNER'])(
@@ -125,18 +155,70 @@ describe('OrdersService.create — discount authority', () => {
 
   it('allows a CASHIER a statutory PWD discount (RA 10754)', async () => {
     const payload = basePayload({
-      isPwdScDiscount: true,
-      discounts: [{ discountType: 'PWD', discountAmount: 40, pwdScIdRef: 'PWD-123' }],
+      isPwdScDiscount: true, subtotal: 200,
+      discounts: [{ discountType: 'PWD', discountAmount: 40, pwdScIdRef: 'PWD-123', pwdScIdOwnerName: 'Juan Cruz' }],
     });
     expect(await ranThrough(payload, 'CASHIER')).toBe(true);
   });
 
   it('allows a CASHIER a statutory Senior Citizen discount (RA 9994)', async () => {
     const payload = basePayload({
-      isPwdScDiscount: true,
-      discounts: [{ discountType: 'SENIOR_CITIZEN', discountAmount: 40, pwdScIdRef: 'SC-9' }],
+      isPwdScDiscount: true, subtotal: 200,
+      discounts: [{ discountType: 'SENIOR_CITIZEN', discountAmount: 40, pwdScIdRef: 'SC-9', pwdScIdOwnerName: 'Maria Reyes' }],
     });
     expect(await ranThrough(payload, 'CASHIER')).toBe(true);
+  });
+
+  /*
+    The statutory flag used to be a blanket escape: any whole-cart discount
+    with isPwdScDiscount: true passed the wall with no line, no card and no
+    limit. The till always sends a PWD/SC line with the card number and name,
+    so a real senior sale is untouched; a made-up one is not.
+  */
+  const statutoryError = async (payload: unknown) => {
+    try {
+      await svc.create(TENANT, CASHIER, payload as never, { callerRole: 'CASHIER' });
+      return null;
+    } catch (err) {
+      if (err instanceof BadRequestException) return (err.getResponse() as { code?: string })?.code ?? null;
+      if (err instanceof ForbiddenException) return (err.getResponse() as { code?: string })?.code ?? null;
+      return 'OTHER';
+    }
+  };
+
+  it('blocks a whole-cart discount that only waves the PWD/SC flag, with no discount line', async () => {
+    const payload = basePayload({ isPwdScDiscount: true, discountAmount: 250, discounts: [] });
+    expect(await statutoryError(payload)).toBe('PWDSC_LINE_REQUIRED');
+  });
+
+  it('blocks a senior line with no card number or name', async () => {
+    const payload = basePayload({
+      isPwdScDiscount: true, subtotal: 200,
+      discounts: [{ discountType: 'SENIOR_CITIZEN', discountAmount: 40 }],
+    });
+    expect(await statutoryError(payload)).toBe('PWDSC_ID_REQUIRED');
+  });
+
+  it('takes the card from the order when the first line carries none (how the till sends it)', async () => {
+    const payload = basePayload({
+      isPwdScDiscount: true, subtotal: 200, pwdScIdRef: 'SC-77', pwdScIdOwnerName: 'Lola Nena',
+      discounts: [{ discountType: 'SENIOR_CITIZEN', discountAmount: 40 }],
+    });
+    expect(await statutoryError(payload)).not.toBe('PWDSC_ID_REQUIRED');
+  });
+
+  it('caps a statutory discount at what the law gives (20%, VAT-exclusive plus VAT for a VAT shop)', async () => {
+    const tooMuch = basePayload({
+      isPwdScDiscount: true, subtotal: 200,
+      discounts: [{ discountType: 'PWD', discountAmount: 120, pwdScIdRef: 'PWD-1', pwdScIdOwnerName: 'Juan' }],
+    });
+    expect(await statutoryError(tooMuch)).toBe('PWDSC_DISCOUNT_TOO_LARGE');
+    // A VAT shop: 200 gross -> 178.57 ex-VAT, 20% = 35.71, plus the 21.43 VAT waived = 57.14.
+    const legal = basePayload({
+      isPwdScDiscount: true, subtotal: 200,
+      discounts: [{ discountType: 'PWD', discountAmount: 57.14, pwdScIdRef: 'PWD-1', pwdScIdOwnerName: 'Juan' }],
+    });
+    expect(await statutoryError(legal)).not.toBe('PWDSC_DISCOUNT_TOO_LARGE');
   });
 
   it('allows a configured PROMO to apply without supervisor approval', async () => {

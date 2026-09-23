@@ -67,6 +67,12 @@ export interface CreateOrderOptions {
    * till (offline sync), where the approving supervisor is not re-presented.
    */
   enforceDiscountAuthority?: boolean;
+  /**
+   * A supervisor's PIN, typed at the till, for a discretionary discount the
+   * caller may not grant alone. Resolved here against the supervisor's hash;
+   * the body's authorizedById is never believed.
+   */
+  supervisorPin?: string;
 }
 
 @Injectable()
@@ -161,6 +167,7 @@ export class OrdersService {
       skipStockCeiling        = false,
       replayedOffline         = false,
       callerCustomPermissions = null,
+      supervisorPin           = undefined,
     } = opts;
 
     // Idempotency: if clientUuid already exists FOR THIS TENANT, return it.
@@ -339,13 +346,55 @@ export class OrdersService {
     // explain it.
     if (opts.enforceDiscountAuthority !== false && callerRole) {
       const DISCRETIONARY = new Set(['CASHIER_APPLIED', 'MANAGER_OVERRIDE']);
+      const STATUTORY     = new Set(['PWD', 'SENIOR_CITIZEN']);
       const discretionary = payload.discounts.filter(
         (d) => DISCRETIONARY.has(d.discountType) && Number(d.discountAmount) > 0,
       );
+      const statutory = payload.discounts.filter(
+        (d) => STATUTORY.has(d.discountType) && Number(d.discountAmount) > 0,
+      );
+
+      /*
+        A statutory discount is the customer's right, not the cashier's gift,
+        so it is not gated on authority -- but it is gated on being real. The
+        till always sends a PWD/SC line carrying the card number and the name
+        (terminal/page.tsx), so a sale that claims the flag with no such line,
+        or a line with no card, is not a senior at the counter: it is the
+        wall being walked around. And the law fixes the size: 20% off (of the
+        VAT-exclusive price, plus the VAT itself, for a VAT-registered shop),
+        so a "senior discount" bigger than that is a gift wearing a badge.
+      */
+      if (payload.isPwdScDiscount || statutory.length > 0) {
+        if (statutory.length === 0) {
+          throw new BadRequestException({
+            code:    'PWDSC_LINE_REQUIRED',
+            message: 'A senior or PWD discount needs the card details. Apply it from the Senior / PWD button.',
+          });
+        }
+        statutory.forEach((d, i) => {
+          const ref  = (d.pwdScIdRef       ?? (i === 0 ? payload.pwdScIdRef       : undefined) ?? '').trim();
+          const name = (d.pwdScIdOwnerName ?? (i === 0 ? payload.pwdScIdOwnerName : undefined) ?? '').trim();
+          if (!ref || !name) {
+            throw new BadRequestException({
+              code:    'PWDSC_ID_REQUIRED',
+              message: 'Type the senior or PWD card number and the name on it before applying the discount.',
+            });
+          }
+        });
+        const share = tenant.taxStatus === 'VAT' ? 1 - 0.8 / 1.12 : 0.2;
+        const cap   = Number(payload.subtotal) * share + 0.05;
+        const given = statutory.reduce((sum, d) => sum + Number(d.discountAmount), 0);
+        if (given > cap) {
+          throw new BadRequestException({
+            code:    'PWDSC_DISCOUNT_TOO_LARGE',
+            message: 'That is more than the 20% the law gives a senior or PWD. Check the discount.',
+          });
+        }
+      }
+
+      // A whole-cart discount with no line to explain it needs authority whatever flag rides with it.
       const unexplainedCartDiscount =
-        Number(payload.discountAmount) > 0 &&
-        payload.discounts.length === 0 &&
-        !payload.isPwdScDiscount;
+        Number(payload.discountAmount) > 0 && payload.discounts.length === 0;
 
       if (discretionary.length > 0 || unexplainedCartDiscount) {
         const callerMayDiscount = hasPermission(
@@ -354,38 +403,35 @@ export class OrdersService {
           callerCustomPermissions,
         );
 
-        // A cashier may still ring one, but only with a supervisor who
-        // actually holds the authority standing behind it — and never
-        // themselves (that is the self-approval this rule exists to stop).
-        let supervisorApproved = false;
+        /*
+          A cashier may still ring one, but only with a supervisor standing
+          at the till: their PIN, checked here against their own hash, the
+          same way a void is approved. The body used to name an authorizer by
+          id and the server merely checked that person existed and held the
+          authority -- an id any staff member can read off a buy list, so a
+          cashier could stamp the owner's name on any discount alone.
+        */
+        let supervisor: { id: string; name: string; role: string } | null = null;
         if (!callerMayDiscount) {
-          const supervisorIds = [
-            ...new Set(
-              discretionary
-                .map((d) => d.authorizedById)
-                .filter((id): id is string => !!id && id !== cashierId),
-            ),
-          ];
-          if (supervisorIds.length > 0 && discretionary.every((d) => d.authorizedById)) {
-            const supervisors = await this.prisma.user.findMany({
-              where:  { id: { in: supervisorIds }, tenantId, isActive: true },
-              select: { role: true, customPermissions: true },
+          if (!supervisorPin) {
+            throw new ForbiddenException({
+              code:    'DISCOUNT_NOT_AUTHORIZED',
+              message:
+                `Role '${callerRole}' cannot authorize this discount. ` +
+                'Ask a supervisor to enter their PIN.',
             });
-            supervisorApproved =
-              supervisors.length === supervisorIds.length &&
-              supervisors.every((s) =>
-                hasPermission(s.role, 'order:apply_discount', s.customPermissions),
-              );
+          }
+          supervisor = await this.resolveSupervisorByPin(tenantId, supervisorPin, cashierId);
+          if (!hasPermission(supervisor.role, 'order:apply_discount')) {
+            throw new ForbiddenException({
+              code:    'DISCOUNT_NOT_AUTHORIZED',
+              message: 'That supervisor cannot authorize discounts.',
+            });
           }
         }
-
-        if (!callerMayDiscount && !supervisorApproved) {
-          throw new ForbiddenException({
-            code:    'DISCOUNT_NOT_AUTHORIZED',
-            message:
-              `Role '${callerRole}' cannot authorize this discount. ` +
-              'Ask a supervisor to approve it.',
-          });
+        // Who stands behind the discount is decided here, never copied from the body.
+        for (const d of discretionary) {
+          d.authorizedById = supervisor?.id ?? cashierId ?? undefined;
         }
       }
     }
@@ -412,11 +458,37 @@ export class OrdersService {
         }
       }
       if ((payload as any).shiftId) {
-        const shiftCount = await this.prisma.shift.count({
-          where: { id: (payload as any).shiftId, tenantId },
+        const shift = await this.prisma.shift.findFirst({
+          where:  { id: (payload as any).shiftId, tenantId },
+          select: { cashierId: true, closedAt: true },
         });
-        if (shiftCount !== 1) {
+        if (!shift) {
           throw new BadRequestException('Shift does not belong to your organization.');
+        }
+        /*
+          A sale lands in the drawer of the shift it names, so the shift must
+          be the caller's own -- otherwise a cashier can put her sales (and the
+          shortfall) on a colleague's drawer. Supervisors ring on any till on
+          purpose (an owner helping at the counter). A closed shift is refused
+          for a live till only: a sale replayed from the offline queue really
+          did go into that drawer while it was open, and refusing it now would
+          lose a real sale (orders.cash-needs-a-till.spec.ts).
+        */
+        const SHIFT_ANY_TILL = ['SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'SUPER_ADMIN'];
+        if (
+          channel === 'POS' && callerRole && !SHIFT_ANY_TILL.includes(callerRole) &&
+          cashierId && shift.cashierId && shift.cashierId !== cashierId
+        ) {
+          throw new ForbiddenException({
+            code:    'NOT_YOUR_SHIFT',
+            message: 'That drawer belongs to someone else. Ring the sale on your own shift.',
+          });
+        }
+        if (channel === 'POS' && !replayedOffline && shift.closedAt) {
+          throw new BadRequestException({
+            code:    'SHIFT_CLOSED',
+            message: 'That till is closed. Open a new shift before ringing a sale.',
+          });
         }
       }
       const variantIds = Array.from(new Set(

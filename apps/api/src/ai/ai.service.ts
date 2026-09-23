@@ -8,9 +8,9 @@
  *   - Switching providers later (Anthropic → OpenAI → on-device) doesn't
  *     change the call sites
  *
- * Cost cap: AI_MONTHLY_BUDGET_USD env var sets the per-tenant cap. The
- * default is permissive (₱500-equivalent / ~$10) so dev tenants don't
- * trip on it. Production should override per-tier.
+ * Cost cap: AI_MONTHLY_BUDGET_USD env var sets the per-tenant cap, $50 by
+ * default — about a month of receipt reading for one cafe. Raise or lower it
+ * per shop with AI_MONTHLY_BUDGET_USD_BY_TENANT.
  */
 
 import {
@@ -22,6 +22,11 @@ import {
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
 import { callGemini } from './providers/gemini.provider';
+import {
+  readGoogleCredentials,
+  GOOGLE_CREDENTIALS_VAR,
+  type GoogleServiceAccountKey,
+} from './google-credentials';
 import { isAiEnabled } from './ai-availability';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -32,11 +37,11 @@ import { PrismaService } from '../prisma/prisma.service';
  * aliases as of 2026 (no date suffix — Anthropic resolves these to the
  * current production snapshot).
  *
- * IMPORTANT: prior versions of this file shipped IDs like "claude-opus-4-7"
- * and "claude-sonnet-4-6" which Anthropic never published — every call
- * returned `model_not_found_error` from the API, surfaced to the user as a
- * generic 503. If you hit a 503 from the AI features, check that the IDs
- * resolved here match what Anthropic actually serves.
+ * IMPORTANT: an id Anthropic does not serve returns `model_not_found_error`,
+ * which reaches the user as a generic 503. If the AI features start answering
+ * 503, check these ids against what Anthropic serves today. Whatever you set
+ * must also have a row in PRICING below: the cost step runs after the answer
+ * comes back, and an unpriced id used to turn a paid-for answer into an error.
  */
 export const MODEL_OPUS   = process.env.AI_MODEL_OPUS   ?? 'claude-opus-4-5';
 export const MODEL_SONNET = process.env.AI_MODEL_SONNET ?? 'claude-sonnet-4-5';
@@ -52,8 +57,9 @@ const DEFAULT_MODEL = process.env.AI_DEFAULT_MODEL ?? MODEL_SONNET;
   tuned against Claude's output and a worse read costs more in re-typing than
   the model ever saves.
 
-  An alias, never a dated snapshot, for the same reason the Claude ids above
-  are aliases: Google retires the numbers, not the alias.
+  Unlike the Claude ids above, the Gemini id is a concrete version rather than
+  an alias — Vertex does not resolve Google's "-latest" aliases. See
+  MODEL_GEMINI below.
 */
 export type AiProvider = 'gemini' | 'anthropic';
 // With AI_PROVIDER unset, follow the key that is actually there: a server
@@ -64,7 +70,22 @@ export const AI_PROVIDER: AiProvider =
   : process.env.AI_PROVIDER === 'gemini' ? 'gemini'
   : process.env.ANTHROPIC_API_KEY && !process.env.GOOGLE_CLOUD_PROJECT ? 'anthropic'
   : 'gemini';
-export const MODEL_GEMINI = process.env.GEMINI_MODEL ?? 'gemini-flash-latest';
+/*
+  A concrete, generally-available id, not a "-latest" alias.
+
+  The alias was the wrong call and this is the correction. `gemini-flash-latest`
+  is a Gemini Developer API (AI Studio) convenience: on Vertex it does not
+  resolve to a version — `models.get` hands the alias straight back with the
+  version "default" — and it has been observed returning errors outright while
+  Google moves the pointer between releases. Google's own guidance is that
+  production names a stable model.
+
+  gemini-3.8-flash has been GA since 2 September 2026, with no preview suffix,
+  and it is the current Flash on Vertex. The number WILL age; when it does,
+  set GEMINI_MODEL and restart. That is a deliberate trade: a variable someone
+  has to update beats a call that fails on a day Google changed an alias.
+*/
+export const MODEL_GEMINI = process.env.GEMINI_MODEL ?? 'gemini-3.8-flash';
 
 // Pricing per 1M tokens (input / output USD). Cache reads cost ~0.1x base
 // input; cache writes ~1.25x (5m TTL) or 2x (1h TTL). The keyed lookup falls
@@ -72,25 +93,33 @@ export const MODEL_GEMINI = process.env.GEMINI_MODEL ?? 'gemini-flash-latest';
 // callers are not blocked, but costUsd will be approximate until updated.
 const PRICING: Record<string, { input: number; output: number }> = {
   // 4.x family — production aliases
-  'claude-opus-4-5':    { input: 15.0, output: 75.0 },
+  'claude-opus-4-5':    { input:  5.0, output: 25.0 },
   'claude-sonnet-4-5':  { input:  3.0, output: 15.0 },
   'claude-haiku-4-5':   { input:  1.0, output:  5.0 },
   // Legacy ids kept for any historical AiUsage rows that look them up
-  'claude-opus-4-7':    { input: 15.0, output: 75.0 },
+  'claude-opus-4-7':    { input:  5.0, output: 25.0 },
   'claude-sonnet-4-6':  { input:  3.0, output: 15.0 },
-  /*
-    Gemini Flash, list price on Vertex: 0.75 / 3.75 per 1M as an introductory
-    rate to 31 Dec 2026, then 1.50 / 7.50. The higher pair is what is written
-    here on purpose — a cost estimate that drifts UPWARD on new-year's day is
-    a budget cap that fires early, which is the harmless direction. Override
-    with GEMINI_PRICE_IN / GEMINI_PRICE_OUT if the rate you actually pay
-    differs.
-  */
-  'gemini-flash-latest': {
+  // Gemini, at whatever id is in service — see GEMINI_PRICING below.
+  'gemini-3.8-flash':    geminiPricing(),
+  'gemini-flash-latest': geminiPricing(),
+};
+
+/*
+  Gemini Flash, list price on Vertex: 0.75 / 3.75 per 1M as an introductory
+  rate to 31 Dec 2026, then 1.50 / 7.50. The higher pair is what is written
+  here on purpose — a cost estimate that drifts UPWARD on new-year's day is a
+  budget cap that fires early, which is the harmless direction. Override with
+  GEMINI_PRICE_IN / GEMINI_PRICE_OUT if the rate you actually pay differs.
+
+  A function rather than a constant only so the table above can be written
+  before it; the values come from the environment either way.
+*/
+function geminiPricing(): { input: number; output: number } {
+  return {
     input:  envPrice(process.env.GEMINI_PRICE_IN,  1.5),
     output: envPrice(process.env.GEMINI_PRICE_OUT, 7.5),
-  },
-};
+  };
+}
 
 /**
  * A price from the environment, where BLANK means "not set" and never zero.
@@ -112,7 +141,9 @@ function envPrice(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-const DEFAULT_MONTHLY_BUDGET_USD = envPrice(process.env.AI_MONTHLY_BUDGET_USD, 10);
+// $50, the figure .env.example and DEPLOY.md quote. It was $10 here, which buys roughly
+// 200-500 receipt reads: a shop on a 1,000-prompt plan would stop dead in week three.
+const DEFAULT_MONTHLY_BUDGET_USD = envPrice(process.env.AI_MONTHLY_BUDGET_USD, 50);
 
 interface CallParams {
   tenantId:    string;
@@ -153,21 +184,95 @@ export class AiService {
     }
 
     /*
-      Vertex reads its credentials the way every Google library does — from
-      GOOGLE_APPLICATION_CREDENTIALS, or the metadata server — so there is no
-      key to pass here. Project and location are the two things it cannot
-      guess.
+      Vertex credentials, from a variable rather than a file.
+
+      Every Google library looks for a JSON key FILE at
+      GOOGLE_APPLICATION_CREDENTIALS, or for a metadata server. Railway gives
+      us neither, so the Vertex path could not sign a single request until
+      GOOGLE_CREDENTIALS_JSON existed. Passed here as googleAuthOptions, the
+      SDK builds its GoogleAuth from these contents instead of going looking.
+
+      With the variable unset this is exactly the old behaviour, which is what
+      a developer's machine wants: `gcloud auth application-default login` has
+      already left the file there.
     */
-    const project  = process.env.GOOGLE_CLOUD_PROJECT;
-    const location = process.env.GOOGLE_CLOUD_LOCATION ?? 'us-central1';
-    if (project) {
-      this.gemini = new GoogleGenAI({ vertexai: true, project, location });
+    let credentials: GoogleServiceAccountKey | null = null;
+    let credentialsBroken = false;
+    try {
+      credentials = readGoogleCredentials();
+    } catch (err) {
+      /*
+        A bad paste must not stop the API from booting. Clerque is a till
+        first; AI is an optional extra that is switched off by default, and
+        taking the shop's POS down over it would be the wrong trade. So this
+        is logged, the Gemini client is not built, and AI answers 503 while
+        everything else runs.
+
+        The message comes from google-credentials.ts, names the variable, and
+        carries no part of the key — logged as `.message`, never the Error
+        itself, so no stack trace goes to the log either.
+      */
+      credentialsBroken = true;
+      this.logger.error(
+        err instanceof Error
+          ? err.message
+          : `${GOOGLE_CREDENTIALS_VAR} could not be read.`,
+      );
     }
 
-    if (AI_PROVIDER === 'gemini' && !this.gemini) {
-      this.logger.warn('AI_PROVIDER=gemini but GOOGLE_CLOUD_PROJECT is not set — AI features will return 503.');
+    // The key file names its own project, so GOOGLE_CLOUD_PROJECT is only
+    // needed when it disagrees or when the key came from elsewhere.
+    const project  = process.env.GOOGLE_CLOUD_PROJECT?.trim() || credentials?.project_id;
+    const location = process.env.GOOGLE_CLOUD_LOCATION ?? 'us-central1';
+    if (project && !credentialsBroken) {
+      this.gemini = new GoogleGenAI({
+        vertexai: true,
+        project,
+        location,
+        // Spread, not a key set to undefined: the absent case has to stay
+        // byte-identical to the old constructor call.
+        ...(credentials ? { googleAuthOptions: { credentials, projectId: project } } : {}),
+      });
+    }
+
+    if (!isAiEnabled()) {
+      /*
+        Say the quiet thing plainly. With AI switched off — which is every
+        deployment today — none of the warnings below describe a fault, and a
+        boot log that says "AI features will return 503" on a server where AI
+        was deliberately turned off is exactly the sort of thing that has
+        somebody debugging a non-problem from an airport.
+      */
+      this.logger.log(
+        'AI features are switched off (AI_FEATURES_ENABLED is not "true"). ' +
+        'No provider is contacted and nothing is spent.',
+      );
+    } else if (AI_PROVIDER === 'gemini' && !this.gemini) {
+      this.logger.warn(
+        credentialsBroken
+          ? `AI_PROVIDER=gemini but ${GOOGLE_CREDENTIALS_VAR} could not be read (see the error above) — AI features will return 503.`
+          : `AI_PROVIDER=gemini but no Google project is set — set GOOGLE_CLOUD_PROJECT, or ${GOOGLE_CREDENTIALS_VAR} whose key file names one. AI features will return 503.`,
+      );
     } else if (AI_PROVIDER === 'anthropic' && !this.client) {
       this.logger.warn('ANTHROPIC_API_KEY is not set — AI features will return 503.');
+    } else if (
+      AI_PROVIDER === 'gemini' &&
+      !credentials &&
+      !process.env.GOOGLE_APPLICATION_CREDENTIALS
+    ) {
+      /*
+        The honest half of the switch. A project alone builds a client that
+        LOOKS configured and then fails on the first call, because there is
+        nothing for it to sign with. Railway has no credentials file and no
+        metadata server, so on Railway this warning means "AI will 503 the
+        moment someone presses the button" — say so at boot rather than
+        letting a cashier discover it over a receipt.
+      */
+      this.logger.warn(
+        `AI_PROVIDER=gemini with a project but no ${GOOGLE_CREDENTIALS_VAR} and no ` +
+        `GOOGLE_APPLICATION_CREDENTIALS — Vertex can only authenticate here if this host ` +
+        `has a Google metadata server. Railway does not; set ${GOOGLE_CREDENTIALS_VAR}.`,
+      );
     }
   }
 
@@ -320,7 +425,27 @@ export class AiService {
     cacheReadTokens = 0,
     cacheWriteTokens = 0,
   ): number {
-    const p = PRICING[model] ?? PRICING[DEFAULT_MODEL];
+    /*
+      An unlisted Gemini id is priced as Gemini, never as Sonnet.
+
+      Without this, setting GEMINI_MODEL to a newer Flash — the exact thing
+      the variable exists for — dropped through to the DEFAULT_MODEL entry and
+      billed the call at Claude Sonnet's rate: 2x the input and 2x the output
+      of what was actually spent. The cost dashboard would have read high and
+      the monthly cap would have fired at half the usage. Wrong in the
+      harmless direction, but wrong.
+    */
+    /*
+      The last term matters. PRICING[DEFAULT_MODEL] is itself undefined when
+      AI_DEFAULT_MODEL names a model this table has never heard of, and this
+      runs in a finally block AFTER the provider has answered and billed: an
+      undefined here turned a good answer into a 500 and dropped the usage
+      row — paid for, not delivered, not recorded.
+    */
+    const p =
+      PRICING[model] ??
+      (model.startsWith('gemini') ? geminiPricing() : PRICING[DEFAULT_MODEL]) ??
+      PRICING['claude-sonnet-4-5'];
     return (
       (inputTokens      / 1e6) * p.input        +
       (outputTokens     / 1e6) * p.output       +

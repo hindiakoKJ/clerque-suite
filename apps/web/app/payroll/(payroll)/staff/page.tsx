@@ -19,7 +19,7 @@ interface Employee {
   position: string;
   status: 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
   startDate: string;
-  basicRate: number;
+  basicRate: number | null;
   salaryType?: string | null;
   shiftStart?: string | null;
   shiftEnd?:   string | null;

@@ -39,7 +39,7 @@ describe('OrdersService.create — cash needs a till', () => {
   const build = () => {
     const prisma = {
       order:  { findFirst: jest.fn().mockResolvedValue(null) },
-      shift:  { count: jest.fn().mockResolvedValue(1) },
+      shift: { count: jest.fn().mockResolvedValue(1), findFirst: jest.fn().mockResolvedValue({ cashierId: null, closedAt: null }) },
       tenant: { findUniqueOrThrow: jest.fn().mockResolvedValue({ taxStatus: 'VAT', isVatRegistered: true }) },
       $transaction: jest.fn(),
     } as any;

@@ -115,10 +115,11 @@ export class PayrollController {
 
   /** List all employees for the tenant */
   @ApiOperation({ summary: 'List all employees (HR view)' })
-  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER', 'MDM')
+  @Roles('BUSINESS_OWNER', 'PAYROLL_MASTER', 'BRANCH_MANAGER')
   @Get('employees')
   getEmployees(@CurrentUser() user: JwtPayload) {
-    return this.payrollService.getEmployees(user.tenantId!);
+    // The rate comes back only for payroll:view_salary holders; a manager gets the roster alone.
+    return this.payrollService.getEmployees(user.tenantId!, user.role, user.customPermissions);
   }
 
   /** Weekly timesheet aggregated per employee */

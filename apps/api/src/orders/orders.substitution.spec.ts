@@ -102,7 +102,7 @@ describe('OrdersService — ingredient substitution', () => {
       $executeRaw: jest.fn().mockResolvedValue(0),
       $executeRawUnsafe: jest.fn().mockResolvedValue(0),
       $queryRaw: jest.fn().mockResolvedValue([]),
-      shift: { count: jest.fn().mockResolvedValue(1) },
+      shift: { count: jest.fn().mockResolvedValue(1), findFirst: jest.fn().mockResolvedValue({ cashierId: null, closedAt: null }) },
       product: {
         findMany: jest.fn().mockResolvedValue([
           { id: PRODUCT, name: 'Latte', inventoryMode: 'RECIPE_BASED', costPrice: 0 },
@@ -116,7 +116,7 @@ describe('OrdersService — ingredient substitution', () => {
         order:  { findFirst: jest.fn().mockResolvedValue(null) },
         // The order carries a shiftId now — a POS cash sale needs a drawer to
         // put the money in — so the ownership check runs.
-        shift:  { count: jest.fn().mockResolvedValue(1) },
+        shift: { count: jest.fn().mockResolvedValue(1), findFirst: jest.fn().mockResolvedValue({ cashierId: null, closedAt: null }) },
         tenant: {
           findUniqueOrThrow: jest.fn().mockResolvedValue({ taxStatus: 'VAT', planCode: 'CLERQUE', isPtuHolder: false }),
           findUnique: jest.fn().mockResolvedValue({ taxStatus: 'VAT', planCode: 'CLERQUE' }),

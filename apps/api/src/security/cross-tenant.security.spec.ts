@@ -61,7 +61,9 @@ function makePrismaMock() {
   // path) and inner-tx callers (post-Sprint-11 atomic close). Share the same
   // mock function so either invocation site lets the assertion pass.
   const shiftUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
-  const shiftFindFirst  = jest.fn();
+  // orders.service.create reads the named shift (owner + open/closed) through
+  // findFirst; present-by-default like count below, no owner so any caller passes.
+  const shiftFindFirst  = jest.fn().mockResolvedValue({ id: 'shift-1', cashierId: null, closedAt: null });
   return {
     tenant:      { findUniqueOrThrow: jest.fn(), findUnique: jest.fn().mockResolvedValue({ valuationMethod: 'WAC' }) },
     order:       {

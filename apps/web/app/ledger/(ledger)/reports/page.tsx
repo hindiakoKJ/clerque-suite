@@ -358,12 +358,14 @@ export default function ReportsHubPage() {
     enabled:  !!user,
     staleTime: 5 * 60_000,
   });
+  // Periods belong to the advanced ledger: asking for them on Simple books refused every page load.
+  const isFullLedger = user?.planFeatures?.advancedAccounting ?? false;
   const { data: periods = [] } = useQuery<PeriodOpt[]>({
     queryKey: ['accounting-periods-min'],
     queryFn:  () => api.get('/accounting-periods').then((r) =>
       (r.data ?? []).map((p: { id: string; name: string }) => ({ id: p.id, name: p.name })),
     ),
-    enabled:  !!user,
+    enabled:  !!user && isFullLedger,
     staleTime: 5 * 60_000,
   });
 
@@ -382,8 +384,9 @@ export default function ReportsHubPage() {
             : r.planFeature === 'auditLog'         ? 'audit log'
             : r.planFeature === 'advancedAccounting' ? 'full accounting'
             : r.planFeature;
+          // Simple books is the owner's own switch in Settings, not a paid tier, so this one never says "upgrade".
           const reason = r.planFeature === 'advancedAccounting'
-            ? 'Locked — upgrade to full accounting to unlock this report.'
+            ? 'Locked — the books are on Simple. The owner switches them to Full in Settings > Ledger mode.'
             : `Locked — your plan does not include ${featureLabel}. Upgrade to unlock.`;
           return { def: r, locked: true as const, reason };
         }

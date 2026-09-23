@@ -27,6 +27,30 @@ import { AiService, MODEL_OPUS } from './ai.service';
 const GUIDE_MODEL = MODEL_OPUS;
 const GUIDE_PROMPT_VERSION = 'v1.0.0';
 
+/**
+ * The model's verdict, read into one of the three words the screen acts on,
+ * or null when it cannot be read at all.
+ *
+ * "WARNING" is the spelling a model reaches for — one letter from the word
+ * the screen knows, and worth nothing to it. Rather than treat a near miss as
+ * no answer, the first word is matched, so WARNING, warnings and BLOCKED all
+ * land where they plainly meant to.
+ */
+function readVerdict(raw: unknown): GuideResult['verdict'] | null {
+  const word = typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+  if (word.startsWith('BLOCK')) return 'BLOCKING';
+  if (word.startsWith('WARN'))  return 'WARNINGS';
+  if (word === 'OK')            return 'OK';
+  return null;
+}
+
+/** What to say when the model gave a verdict but forgot the sentence. */
+const SUMMARY_FALLBACK: Record<GuideResult['verdict'], string> = {
+  OK:       'Nothing to flag — the accounts and the sides look like the usual pattern.',
+  WARNINGS: 'Worth a second look before you post this.',
+  BLOCKING: 'Something here needs fixing before this can be posted.',
+};
+
 const GUIDE_SYSTEM_PROMPT = `You are a Philippine accounting reviewer. The user will give you a draft Journal Entry plus the tenant's Chart of Accounts and tax status. Your job is to surface issues a non-accountant might miss, before they post.
 
 WHAT TO CHECK:
@@ -163,8 +187,15 @@ export class JournalGuideService {
       throw new BadRequestException('Could not understand the AI response. Try again.');
     }
 
-    // Sanitize: clamp lineIndex to valid range
-    parsed.issues = (parsed.issues ?? []).map((i) => ({
+    /*
+      Sanitize: clamp lineIndex to valid range.
+
+      `issues` has to be a LIST before anything maps over it. A model that
+      answers with an object there turned the whole route into a 500 that
+      tells the person "an unexpected error occurred" — when the honest
+      outcome is simply a check with nothing to show.
+    */
+    parsed.issues = (Array.isArray(parsed.issues) ? parsed.issues : []).map((i) => ({
       ...i,
       lineIndex: i.lineIndex != null && i.lineIndex >= 0 && i.lineIndex < entry.lines.length ? i.lineIndex : null,
     }));
@@ -176,6 +207,28 @@ export class JournalGuideService {
       }
       return i;
     });
+
+    /*
+      The verdict is re-derived, not taken on trust.
+
+      It is the field the SCREEN acts on: it picks the colour of the panel and
+      it is what disables "Post Entry". A model that leaves it out, or spells
+      it "WARNING", fell through every check the screen makes and landed on
+      the all-clear branch — so an entry with a BLOCK issue listed right
+      underneath stayed postable. The severities are the honest signal and
+      they have just been sanitised, so an unusable verdict is replaced by
+      what the issues say, and a listed BLOCK always blocks.
+    */
+    const blocking = parsed.issues.some((i) => i.severity === 'BLOCK');
+    parsed.verdict = blocking
+      ? 'BLOCKING'
+      : readVerdict(parsed.verdict) ?? (parsed.issues.length > 0 ? 'WARNINGS' : 'OK');
+
+    // The summary is the one sentence a non-accountant reads. An answer that
+    // left it out should still say something.
+    if (typeof parsed.summary !== 'string' || parsed.summary.trim() === '') {
+      parsed.summary = SUMMARY_FALLBACK[parsed.verdict];
+    }
 
     parsed.meta = { promptVersion: GUIDE_PROMPT_VERSION, aiAssisted: true };
     return parsed;

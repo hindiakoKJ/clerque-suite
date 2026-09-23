@@ -105,9 +105,42 @@ describe('PayrollService — Sprint 3 endpoints', () => {
         },
       ]);
 
-      const [anna] = await svc.getEmployees('t1');
+      const [anna] = await svc.getEmployees('t1', 'BUSINESS_OWNER');
 
       expect(anna.salaryType).toBe('HOURLY');
+      expect(anna.basicRate).toBe(85);
+    });
+
+    /*
+      A branch manager needs the roster for timesheets, not the pay. The
+      route used to hand every rate to any manager; now the rate is not even
+      selected unless the caller holds payroll:view_salary.
+    */
+    it('hands a BRANCH_MANAGER the roster with no pay rate, and never selects the column', async () => {
+      prisma.user.findMany.mockResolvedValue([
+        {
+          id: 'u1', name: 'Anna', email: 'anna@cafe.ph', phone: null,
+          position: 'Barista', isActive: true, hiredAt: new Date('2026-01-15'),
+          shiftStart: '07:00', shiftEnd: '16:00', branch: { name: 'Main' },
+        },
+      ]);
+
+      const [anna] = await svc.getEmployees('t1', 'BRANCH_MANAGER');
+
+      expect(anna.name).toBe('Anna');
+      expect(anna.basicRate).toBeNull();
+      expect(anna.salaryType).toBeNull();
+      const select = prisma.user.findMany.mock.calls[0][0].select;
+      expect(select.salaryRate).toBe(false);
+      expect(select.salaryType).toBe(false);
+    });
+
+    it('gives PAYROLL_MASTER the rate, as before', async () => {
+      prisma.user.findMany.mockResolvedValue([
+        { id: 'u1', name: 'Anna', email: 'a', phone: null, position: 'Barista', isActive: true, hiredAt: null,
+          salaryRate: 85, salaryType: 'HOURLY', shiftStart: null, shiftEnd: null, branch: null },
+      ]);
+      const [anna] = await svc.getEmployees('t1', 'PAYROLL_MASTER');
       expect(anna.basicRate).toBe(85);
     });
 
@@ -121,7 +154,7 @@ describe('PayrollService — Sprint 3 endpoints', () => {
         },
       ]);
 
-      const [ben] = await svc.getEmployees('t1');
+      const [ben] = await svc.getEmployees('t1', 'BUSINESS_OWNER');
 
       // The client falls back to MONTHLY for display, but the server must not
       // pretend to know — otherwise the guess becomes the stored truth on save.

@@ -6,6 +6,13 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
+  /**
+   * When this process started. A token with no `sid` is honoured only if it
+   * was issued before then -- by the previous build -- and such tokens die
+   * on their own within eight hours of the deploy. Public so a test can move it.
+   */
+  static bootAt = Date.now();
+
   constructor(private prisma: PrismaService) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -27,6 +34,35 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     */
     const claims = payload as unknown as { kind?: unknown; type?: unknown };
     if (claims.kind !== undefined || claims.type !== undefined) throw new UnauthorizedException();
+
+    /*
+      An access token is only as alive as its session. `sid` names the
+      UserSession it was minted with; a session ended by sign-out, "sign out
+      everywhere", a password change or the Console's tenant-wide revoke ends
+      the token at the next request instead of at its eight-hour expiry. One
+      indexed read -- the session with its user -- replaces the user read.
+    */
+    if (payload.sid) {
+      const session = await this.prisma.userSession.findUnique({
+        where:  { id: payload.sid },
+        select: { status: true, userId: true, user: { select: { isActive: true } } },
+      });
+      if (!session || session.status !== 'ACTIVE' || session.userId !== payload.sub || !session.user.isActive) {
+        throw new UnauthorizedException();
+      }
+      return payload;
+    }
+
+    /*
+      No sid. Super-admin tokens never carry one (the Console signs in for
+      two hours at a time, with no session row). Anyone else's must have been
+      minted by the previous build, before this process started: nothing
+      signed since leaves the sid out, so a newer sid-less token is forged.
+    */
+    if (!payload.isSuperAdmin) {
+      const issuedAt = Number((payload as { iat?: number }).iat ?? 0) * 1000;
+      if (!(issuedAt > 0) || issuedAt >= JwtStrategy.bootAt) throw new UnauthorizedException();
+    }
 
     // All principals (including SUPER_ADMIN) are stored in the User table.
     // The legacy SuperAdmin model is not used for JWT validation — super-admins

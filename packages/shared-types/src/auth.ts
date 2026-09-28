@@ -156,6 +156,13 @@ export interface JwtPayload {
   branchId:       string | null;
   role:           UserRole;
   isSuperAdmin:   boolean;
+  /**
+   * The UserSession this access token was minted with. Checked on every
+   * request: a revoked session ends the token at once, not at its expiry.
+   * Absent on super-admin tokens (no session row) and on tokens minted
+   * before 2026-09-28, which are honoured until they expire.
+   */
+  sid?:           string;
   appAccess:      AppAccessEntry[];
   /**
    * Primary BIR tax classification for the tenant.

@@ -345,11 +345,15 @@ plain `CREATE INDEX` while the table is still small).
 
 ---
 
-## 7. Turning AI on — Gemini on Vertex (optional, currently OFF)
+## 7. AI — Gemini on Vertex (ON since 28 September 2026)
 
-AI is switched off on every deployment today. Nothing below is needed to
-run the shop; it is needed the day you want the receipt scanner, the
-journal drafter and the journal guide to work.
+AI is on: `gemini-3.8-flash` on the **global** endpoint, project
+`clerque-ai`, billed to the Google for Startups credit. The steps below are
+what was done, kept for the next project or the day a variable is lost.
+One fact the steps did not know: Gemini 3 Flash is served from
+`GOOGLE_CLOUD_LOCATION=global` only; a region such as `us-central1` answers
+404 for every 3.x id and serves just the 2.5 family, which retires on
+16 October 2026.
 
 The provider is **Gemini on Vertex AI**, which is first-party Google
 Cloud and therefore the only AI the Google for Startups credits can pay

@@ -7,12 +7,18 @@ HNScorpPH landing page lives in the separate `hns-corp-ph` repo, not here.
 
 ## Read These First
 
-Before starting any work, read the following memory files for full context:
+1. `docs/OPERATIONS.md` — how Clerque is run: KJ's working rules, where it is
+   deployed, the variables, how to build and verify, migrations, reaching
+   production from a session (including the cloud), AI, the receipt reader,
+   the security posture, and what is open. It travels with the repository,
+   so a cloud session has it too.
+2. `DEPLOY.md` — the deploy runbook. `tasks/carolina-go-live.md` — the Day-1
+   runbook for the first shop.
 
-- `C:\Users\user\.claude\projects\E--AI-Projects\memory\project_clerque.md` — build state, completed phases, roadmap, deferred features
-- `C:\Users\user\.claude\projects\E--AI-Projects\memory\arch_decisions.md` — locked-in architectural decisions and the reasoning behind them
-- `C:\Users\user\.claude\projects\E--AI-Projects\memory\user_profile.md` — working style and preferences
-- `C:\Users\user\.claude\projects\E--AI-Projects\memory\feedback.md` — how to work with this user
+On KJ's desktop only, the session's memory files add history and reasoning:
+`C:\Users\user\.claude\projects\E--AI-Projects\memory\` (`project_clerque.md`,
+`arch_decisions.md`, `feedback.md`, `user_profile.md`). A cloud session does
+not have them; `docs/OPERATIONS.md` carries what matters from them.
 
 ---
 
@@ -59,8 +65,12 @@ All 10 planned phases are complete. See `project_clerque.md` for the full list.
 
 ## Key Rules
 
-- Always check `project_clerque.md` before proposing new features — it may already be built
-- Follow existing arch decisions in `arch_decisions.md` — do not re-litigate locked decisions
+- Push straight to `master`. A change with a **database migration** goes on a
+  branch with a PR and waits for KJ's word (`start.sh` migrates on deploy).
+- One next action for KJ, not a menu. Verify before claiming done.
+- Check what is already built before proposing a feature (`docs/OPERATIONS.md`,
+  and on the desktop `project_clerque.md`). Locked decisions in
+  `arch_decisions.md` are not re-litigated.
 - No DB triggers — use NestJS `@Cron` or BullMQ
 - SOD rules enforced at service layer, not DB
 - BusinessType is the primary feature gate

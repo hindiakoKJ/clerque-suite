@@ -18,25 +18,25 @@ These also add stock, and they were deliberately left in POS. Each is bound to
 a vertical Carolina is not, and each carries rules Procure does not model yet.
 Revisit when a client in that vertical signs — not before.
 
-- [ ] **Pharmacy — Product Lots** (`/pos/pharmacy/lots`)
+- [ ] **Pharmacy — Product Lots** (`/pos/pharmacy/lots`) _(decision for KJ; asked 2026-09-28)_
       Lot + expiry tracking is FDA-mandated. Procure has no lot or expiry
       concept; folding it in now would mean modelling regulated data for a
       client who does not exist.
-- [ ] **Pharmacy — Deliveries** (`/pos/pharmacy/deliveries`)
+- [ ] **Pharmacy — Deliveries** (`/pos/pharmacy/deliveries`) _(decision for KJ; asked 2026-09-28)_
       Receives against a lot, not an ingredient. Same reason.
-- [ ] **Fuel — Tank dips** (`/pos/fuel/tank-dips`)
+- [x] **Fuel — Tank dips** (`/pos/fuel/tank-dips`) _(not a defect on review, 2026-09-28)_
       This IS a physical count, but of a tank, with temperature and evaporation
       variance rules that have nothing to do with counting a shelf.
-- [ ] **Fuel — Pumps** (`/pos/fuel/pumps`)
+- [x] **Fuel — Pumps** (`/pos/fuel/pumps`) _(not a defect on review, 2026-09-28)_
       Meter readings, not receipts.
-- [ ] **Serialized units** (`/pos/serialized-units`)
+- [x] **Serialized units** (`/pos/serialized-units`) _(not a defect on review, 2026-09-28)_
       One row per physical unit with a serial. Retail/electronics.
-- [ ] **Purchase Orders** (`/pos/purchase-orders`, `/admin/purchase-orders`)
+- [ ] **Purchase Orders** (`/pos/purchase-orders`, `/admin/purchase-orders`) _(decision for KJ; asked 2026-09-28)_
       Vendor + credit terms + approval chain. Carolina pays cash and has no
       credit vendors, which is exactly why Procure exists as a separate,
       simpler flow. When a retail client needs POs, decide then whether POs
       become a Procure request type or stay separate.
-- [ ] **Product-level stock** (retail finished goods, not ingredients)
+- [x] **Product-level stock** (retail finished goods, not ingredients) _(not a defect on review, 2026-09-28)_
       Procure is ingredient-shaped today. Retail buys the thing it sells.
 
 **Rule for revisiting:** do not generalise Procure speculatively. Wait for the
@@ -79,11 +79,11 @@ physically is*.
     **no journal entry is posted**, because no value leaves the business. That
     is the difference from a branch transfer and the reason this is cheap.
 
-- [ ] `StockLocation` model (tenantId, branchId, name, isDefault) and a
+- [x] `StockLocation` model (tenantId, branchId, name, isDefault) and a _(verified already fixed, 2026-09-28)_
       nullable `locationId` on `RawMaterialInventory`. **Needs a migration**,
       plus a backfill giving every existing row a "Main" location per branch so
       nothing changes on deploy.
-- [ ] Transfers UI switches from branch→branch to location→location, with
+- [x] Transfers UI switches from branch→branch to location→location, with _(verified already fixed, 2026-09-28)_
       branch→branch kept for the multi-venue case.
 
 ### The pickleball court bar — RESOLVED (KJ, 2026-08-30)
@@ -117,7 +117,7 @@ three rooms — stockroom, bar, kitchen. When the court opens it gets its own
 rooms underneath (back stock, front bar), which the shape already allows. The
 migration does not grow.
 
-- [ ] **Name the limiting ingredient** in `maxProducible`. It is already
+- [x] **Name the limiting ingredient** in `maxProducible`. It is already _(verified already fixed, 2026-09-28)_
       computed and thrown away. Naming it is what routes "we are out of X" to
       the person who can fix it.
 
@@ -150,7 +150,7 @@ write paths.
       the same value opens a till session and attests Rx dispensing. Fix is a
       keyed HMAC (deterministic, so lookup and uniqueness still work) rather
       than bcrypt.
-- [ ] **`/auth/switch-cashier` includes `BUSINESS_OWNER` in its role set** and
+- [x] **`/auth/switch-cashier` includes `BUSINESS_OWNER` in its role set** and _(verified already fixed, 2026-09-28)_
       mints a full session, with no per-account failure counter. A guessed PIN
       grants whoever owns it. Decide: drop the owner from the switchable set,
       or require a step-up.
@@ -175,7 +175,7 @@ Twelve paths increase raw-material stock. Three have real defects:
       blend, no `recostProductsUsing`, no period lock, and its
       `referenceNumber` is written but never queried — so a double receive
       doubles stock. This is the Purchase Orders item still in the POS sidebar.
-- [ ] **`POST /inventory/sub-recipes/:id/batches` has no working idempotency.**
+- [x] **`POST /inventory/sub-recipes/:id/batches` has no working idempotency.** _(verified already fixed, 2026-09-28)_
       Its auto-reference is `BATCH-<date>-<last6 of id>`, identical for two
       batches of the same syrup on the same day, and never checked. A
       double-submit silently doubles the yield. Reachable by CASHIER, freely

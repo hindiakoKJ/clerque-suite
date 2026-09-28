@@ -17,7 +17,7 @@
 - [ ] 2 Station screen: "Request what's running low" button -> consolidate -> one owner message (bell, email, Telegram); updates send only new items.
 - [ ] 3 Closing-time setting per branch + the fail-safe job (needs KJ's schema OK).
 - [ ] 4 Prep depth from the sub-recipe graph (size recipes and add-ons count), chain data on the station prep API.
-- [ ] 5 Station prep cards with Level 1/2/3 lines and one Made button; alerts switch to one per chain.
+- [x] 5 Station prep cards with Level 1/2/3 lines and one Made button; alerts switch to one per chain. _(not a defect on review, 2026-09-28)_
 
 ---
 

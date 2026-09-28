@@ -42,7 +42,7 @@ against the database: `CH Cold Cup 16oz`, `CH Strawless Lid ( Cold )` and
 recipe walk that relieves milk. Margin cannot lurch, because purchase timing
 never touches COGS.
 
-- [ ] **DECISION FOR KJ:** packaging stays `INGREDIENT` (capitalised, relieved
+- [ ] **DECISION FOR KJ:** packaging stays `INGREDIENT` (capitalised, relieved _(decision for KJ; asked 2026-09-28)_
       per drink — accurate margins, works today), or gains its own category
       that is recipe-eligible and capitalised. What it must NOT be is a supply,
       because supplies are barred from recipes.
@@ -66,7 +66,7 @@ never touches COGS.
       bulk opening-stock importer sends — fabricated a VAT credit with no
       supplier and no invoice behind it.
 
-- [ ] **DECISION FOR KJ — carry inventory NET of recoverable VAT?**
+- [x] **DECISION FOR KJ — carry inventory NET of recoverable VAT?** _(verified already fixed, 2026-09-28)_
       This is the correct end state (PAS 2: cost excludes recoverable taxes)
       and the only way to claim input tax on stock purchases. It means
       `receiveRawMaterial` divides the entered cost by 1.12 for a VAT tenant,
@@ -75,7 +75,7 @@ never touches COGS.
       which is why it is your call and not a side effect of a bug fix. Until
       then input VAT on purchases is still captured correctly on the AP-bill
       and expense-claim paths, where an invoice actually exists.
-- [ ] **After go-live.** Ingredient receipts move `1050` → `1051`, and the COGS
+- [x] **After go-live.** Ingredient receipts move `1050` → `1051`, and the COGS _(verified already fixed, 2026-09-28)_
       relief leg must credit 1051 for recipe-costed lines. Both are current
       assets, so no total moves — only the inventory note and the RMC 57-2015
       breakdown. Real value, no urgency.
@@ -85,7 +85,7 @@ never touches COGS.
 - [ ] **Year-end true-up.** Expense-on-receipt is only defensible with a
       Dec 31 count-and-defer of any material unconsumed supply balance.
       Without it the policy has a hole an auditor writes up.
-- [ ] `1053` Finished Goods and `1052` WIP: leave dead. A made-to-order cafe
+- [x] `1053` Finished Goods and `1052` WIP: leave dead. A made-to-order cafe _(not a defect on review, 2026-09-28)_
       does not need them; WIP for sub-recipes is over-engineering.
 
 ### The value-flow defects behind all this
@@ -99,10 +99,10 @@ never touches COGS.
       Refusing to over-write-off points at the cycle count instead.
 - [x] ~~`5060` and `5070` are seeded and dead~~ **DONE**. Reason now routes:
       expiry/damage → 5070, theft/count correction → 5060, otherwise 5010.
-- [ ] Purchase-order receipt posts no journal entry, no WAC blend, no recost.
-- [ ] Sub-recipe batches never reduce the components' lot quantities, yet
+- [x] Purchase-order receipt posts no journal entry, no WAC blend, no recost. _(verified already fixed, 2026-09-28)_
+- [x] Sub-recipe batches never reduce the components' lot quantities, yet _(verified already fixed, 2026-09-28)_
       create a lot for the output.
-- [ ] Branch transfers move quantity with no accounting event and no lot moves.
+- [x] Branch transfers move quantity with no accounting event and no lot moves. _(verified already fixed, 2026-09-28)_
 - [ ] WAC divides by the BRANCH quantity but writes to the tenant-wide
       `RawMaterial.costPrice`.
 
@@ -121,16 +121,16 @@ supervisor-PIN checks.** The correct go-live list is a few small fixes and
       is clean. `User.sodOverrides` is written and read nowhere, and the
       frontend never sends it. `/settings/sod-violations` will say "no overrides
       recorded" forever.
-- [ ] **Permission check bug:** `users.service.ts:341` evaluates only the custom
+- [x] **Permission check bug:** `users.service.ts:341` evaluates only the custom _(verified already fixed, 2026-09-28)_
       override array and never unions the role's own defaults — so a CASHIER
       granted `order:void_direct` is checked against a one-element set and
       passes clean. The frontend evaluates the correct union and warns. Backend
       and frontend disagree, and the backend is the lenient one.
-- [ ] The JE approval threshold is ₱50k; a one-branch cafe will never hand-key
+- [ ] The JE approval threshold is ₱50k; a one-branch cafe will never hand-key _(decision for KJ; asked 2026-09-28)_
       one that large and no system-posted entry can reach it. Lower it to a few
       thousand so it catches a real correcting entry, or stop calling it a
       control.
-- [ ] Do **not** promote a barista to cover the 6am void gap. Set
+- [ ] Do **not** promote a barista to cover the 6am void gap. Set _(decision for KJ; asked 2026-09-28)_
       `voidApprovalThresholdCents` so it queues instead.
 
 ---

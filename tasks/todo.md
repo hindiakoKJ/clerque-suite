@@ -1177,8 +1177,8 @@ cleaning and all."
       `DocumentsService.uploadBuffer`.
 - [ ] Web `/procure/receipts` — photo → read → review/correct → post → report.
       Home tile + role gate. Requests page shows the attached receipt.
-- [ ] Specs: parser/matcher, confirm flow, module compiles; full suite green.
-- [ ] Live: API up, confirm over HTTP on carolina-test; parse 503s cleanly
+- [x] Specs: parser/matcher, confirm flow, module compiles; full suite green. _(not a defect on review, 2026-09-28)_
+- [x] Live: API up, confirm over HTTP on carolina-test; parse 503s cleanly _(verified already fixed, 2026-09-28)_
       without a key.
 
 ### Built and verified (2026-09-02, KJ AFK)

@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Optional, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -9,7 +9,7 @@ import { ProcurePocket } from './dto/receive-request.dto';
 import { PH_TIMEZONE, cleanSourceName, isSourceKind, sourceKey, type SourceKind } from '@repo/shared-types';
 import {
   promptFor, parseReceiptJson, matchIngredient, derivePack, spreadDiscount, scoreMatch, tokens,
-  MaterialRef, ParsedLine, MatchResult, Candidate, RECEIPT_RESPONSE_SCHEMA,
+  MaterialRef, ParsedLine, MatchResult, Candidate, RECEIPT_RESPONSE_SCHEMA, aliasKeys, itemsOnReceipt,
 } from './receipt-parser';
 import { idsInARecipe } from '../inventory/recipe-use';
 import { ParseReceiptDto, ConfirmReceiptDto, ReceiptStockLineDto } from './dto/receipts.dto';
@@ -43,6 +43,8 @@ import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 
 export interface SuggestedLine extends ParsedLine {
   index:   number;
+  /** True when the shop had already tagged this printed line: the match and the pack size come from that. */
+  remembered: boolean;
   /** inRecipe false: no live recipe uses this record ("not in any recipe"). */
   match:   { rawMaterialId: string; name: string; unit: string; category: string; score: number; inRecipe: boolean } | null;
   alternatives: Array<{ rawMaterialId: string; name: string; unit: string; score: number; inRecipe: boolean }>;
@@ -95,6 +97,8 @@ export function recipeFirst(
 
 @Injectable()
 export class ProcureReceiptsService {
+  private readonly logger = new Logger(ProcureReceiptsService.name);
+
   constructor(
     private readonly prisma:    PrismaService,
     private readonly inventory: InventoryService,
@@ -188,6 +192,7 @@ export class ProcureReceiptsService {
 
     const materials = await this.materials(tenantId);
     const inRecipe  = await idsInARecipe(this.prisma, tenantId);
+    const known     = await this.rememberedFor(tenantId, parsed.lines, materials);
     /*
       The request's own ingredients first. A shop with three sugars and a
       reading of "SUGAR 1KG" is a tie among strangers -- unless the kitchen
@@ -196,8 +201,17 @@ export class ProcureReceiptsService {
     */
     const onList = dto.purchaseRequestId ? await this.requestMaterials(tenantId, dto.purchaseRequestId, materials) : [];
     const lines: SuggestedLine[] = parsed.lines.map((l, index) => {
+      /*
+        What the shop tagged this line as last time comes first, by barcode
+        or by the printed text: no picking, no pack-size question. The name
+        matcher still supplies the other choices, for a re-tag.
+      */
+      const memory = l.kind === 'expense' ? null : (known.get(index) ?? null);
       // An expense line is not on the shelf, so there is nothing to match it to.
-      const m = l.kind === 'expense'
+      const m = memory
+        ? { best: { material: memory.material, score: 1 },
+            alternatives: matchIngredient(l.description, materials).alternatives.filter((a) => a.material.id !== memory.material.id) }
+        : l.kind === 'expense'
         ? { best: null, alternatives: [] }
         : (() => {
             const first = onList.length ? matchIngredient(l.description, onList) : null;
@@ -209,9 +223,19 @@ export class ProcureReceiptsService {
             );
           })();
       const best = m.best;
+      let pack = l.kind === 'expense' ? null : derivePack(l, best?.material ?? null);
+      if (pack && memory?.packSize != null) {
+        pack = {
+          ...pack,
+          packSize:      memory.packSize,
+          needsPackSize: false,
+          note:          `Remembered from an earlier receipt: one holds ${memory.packSize} ${memory.material.unit}.`,
+        };
+      }
       return {
         index,
         ...l,
+        remembered: !!memory,
         match: best ? {
           rawMaterialId: best.material.id,
           name:          best.material.name,
@@ -224,14 +248,15 @@ export class ProcureReceiptsService {
           rawMaterialId: a.material.id, name: a.material.name, unit: a.material.unit, score: +a.score.toFixed(3),
           inRecipe: inRecipe.has(a.material.id),
         })),
-        // The printed count and price stand whoever the line turns out to be; only the pack size waits for a match.
-        pack: l.kind === 'expense' ? null : derivePack(l, best?.material ?? null),
+        pack,
       };
     });
 
     const linesTotal = lines.reduce((s, l) => s + (l.lineTotal ?? 0), 0);
+    const itemsRead  = itemsOnReceipt(parsed.lines);
     return {
       documentKind:    kind,
+      itemCount:       parsed.itemCount,
       vendor:          parsed.vendor,
       dateText:        parsed.dateText,
       dateIso:         parsed.dateIso,
@@ -243,6 +268,7 @@ export class ProcureReceiptsService {
       summary: {
         lines:      lines.length,
         matched:    lines.filter((l) => l.match).length,
+        remembered: lines.filter((l) => l.remembered).length,
         unmatched:  lines.filter((l) => l.kind !== 'expense' && !l.match).length,
         expenses:   lines.filter((l) => l.kind === 'expense').length,
         // An unmatched line is counted under "to pick", not here.
@@ -251,8 +277,82 @@ export class ProcureReceiptsService {
         // A total that does not foot to its lines is the reader missing a line
         // or reading a subtotal as the total. Either way, worth a look.
         footsToTotal: parsed.total == null ? null : Math.abs(linesTotal - parsed.total) < 1,
+        // The till's own item count against what was read: a missed or doubled line shows here.
+        printedItems: parsed.itemCount,
+        itemsRead,
+        itemsMatch:   parsed.itemCount == null ? null : itemsRead === parsed.itemCount,
       },
     };
+  }
+
+  /**
+   * What this shop has already tagged these printed lines as.
+   *
+   * By barcode first -- "ANGELINA NO SUGAR AD 04806503950622" is an
+   * abbreviation no name matcher can place, under a barcode that never
+   * changes -- then by the printed text, for a receipt that prints no code
+   * or a photo where the code was not read. A memory that points at an
+   * ingredient no longer on the list is ignored, not offered.
+   */
+  private async rememberedFor(tenantId: string, lines: ParsedLine[], materials: MaterialRef[]) {
+    const out = new Map<number, { material: MaterialRef; packSize: number | null; brandNote: string | null }>();
+    const keys = lines.map((l) => aliasKeys(l));
+    if (keys.length === 0) return out;
+    const rows = await this.prisma.receiptAlias.findMany({
+      where: {
+        tenantId,
+        OR: [{ key: { in: keys.map((k) => k.key) } }, { printedKey: { in: keys.map((k) => k.printedKey) } }],
+      },
+      orderBy: [{ timesUsed: 'desc' }, { lastUsedAt: 'desc' }],
+      select: { key: true, printedKey: true, rawMaterialId: true, packSize: true, brandNote: true },
+    });
+    if (rows.length === 0) return out;
+    const byId = new Map(materials.map((m) => [m.id, m] as const));
+    lines.forEach((l, i) => {
+      if (l.kind === 'expense') return;
+      const k = keys[i];
+      const hit = rows.find((r) => r.key === k.key) ?? rows.find((r) => r.printedKey === k.printedKey);
+      const material = hit ? byId.get(hit.rawMaterialId) : undefined;
+      if (hit && material) {
+        out.set(i, { material, packSize: hit.packSize != null ? Number(hit.packSize) : null, brandNote: hit.brandNote });
+      }
+    });
+    return out;
+  }
+
+  /**
+   * Learn what was tagged. Every posted stock line that came off the reader
+   * (it carries the printed text) is filed under its barcode or its text with
+   * the ingredient chosen and the pack size posted; a re-tag overwrites. Never
+   * fails the posting: a memory that could not be written is a line the
+   * person picks again next time, not stock that did not land.
+   */
+  private async remember(
+    tenantId: string,
+    userId: string,
+    dto: ConfirmReceiptDto,
+    created: Array<{ id: string; name: string }>,
+  ): Promise<void> {
+    for (const line of dto.lines ?? []) {
+      const printed = line.printedText?.trim();
+      if (!printed) continue;
+      const wanted = (line.create?.name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+      const rawMaterialId = line.rawMaterialId
+        ?? (wanted ? created.find((c) => c.name.toLowerCase() === wanted)?.id : undefined);
+      if (!rawMaterialId) continue;
+      const { key, printedKey } = aliasKeys({ description: printed, barcode: line.barcode ?? null });
+      const barcode = key.startsWith('bc:') ? key.slice(3) : null;
+      const packSize = line.packSize > 0 ? new Prisma.Decimal(line.packSize) : null;
+      try {
+        await this.prisma.receiptAlias.upsert({
+          where:  { tenantId_key: { tenantId, key } },
+          create: { tenantId, key, barcode, printedKey, printedText: printed, rawMaterialId, packSize, brandNote: line.brandNote ?? null, createdById: userId },
+          update: { rawMaterialId, printedKey, printedText: printed, packSize, brandNote: line.brandNote ?? null, timesUsed: { increment: 1 }, lastUsedAt: new Date(), ...(barcode ? { barcode } : {}) },
+        });
+      } catch (err) {
+        this.logger.warn(`Could not remember receipt line "${printed}": ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   /** The materials on a request, as the matcher sees them. Unknown request: nothing, no error -- reading is a suggestion. */
@@ -297,6 +397,8 @@ export class ProcureReceiptsService {
       }
     }
     const result = await this.confirmChecked(tenantId, userId, fallbackBranchId, dto, confirmed);
+    // Posted, so what the person tagged is now what the shop knows.
+    await this.remember(tenantId, userId, dto, (result as { created?: Array<{ id: string; name: string }> }).created ?? []);
     if (this.sanity && confirmed.length > 0) {
       // Only prices that reached the books: a row that failed to post was never "adjusted".
       const failed = (result as { failed?: Array<{ name?: string }> }).failed ?? [];

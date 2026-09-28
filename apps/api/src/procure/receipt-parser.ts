@@ -29,6 +29,7 @@ For each line:
   - lineTotal     the line's total as printed, numeric; null if not printed
   - kind          "ingredient" for food and drink ingredients, "supply" for cleaning, packaging and kitchen consumables that are stocked (bleach, tissue, cups, gloves), "expense" for anything that is not stock at all (a delivery fee, a service charge, parking, a repair)
   - expenseCategory  only for kind "expense": FREIGHT for a shipping or delivery fee, TRANSPORT for fares and parking, else one of RENT, UTILITIES, SUPPLIES, REPAIRS, OTHER
+  - barcode       the product barcode printed on, under or beside the line (8 to 14 digits, as Philippine supermarket receipts print), digits only, or null if none is printed
   - confidence    0-1, your confidence that description, quantity and price were read correctly
 
 Header:
@@ -38,6 +39,7 @@ Header:
   - referenceNumber the receipt / invoice / OR number as printed, or null
   - total           the FINAL total paid, numeric, or null
   - discount        a voucher, coupon or discount that reduced what was paid, as a positive number, or null
+  - itemCount       the number of items the receipt itself prints as a count ("Total Items: 8", "No. of Items: 8", "8 ITEMS"), numeric, or null if none is printed
 
 Rules:
   - A size printed inside the description (1KG, 500G, 1.5L, 12OZ) is the PACK SIZE, not the quantity. If the receipt prints a count, quantity is that count and unit is pc, pack or bottle. Only a weighed line -- a weight with a per-kilo price -- puts the weight in quantity with unit kg.
@@ -53,9 +55,10 @@ Rules:
   "referenceNumber": <string|null>,
   "total": <number|null>,
   "discount": <number|null>,
+  "itemCount": <number|null>,
   "lines": [
     { "description": <string>, "quantity": <number|null>, "unit": <string|null>,
-      "unitPrice": <number|null>, "lineTotal": <number|null>,
+      "unitPrice": <number|null>, "lineTotal": <number|null>, "barcode": <string|null>,
       "kind": <"ingredient"|"supply"|"expense">, "expenseCategory": <string|null>,
       "confidence": <0-1> }
   ]
@@ -113,6 +116,8 @@ export interface ParsedLine {
   unit:             string | null;
   unitPrice:        number | null;
   lineTotal:        number | null;
+  /** The product barcode printed with the line, digits only. The shop's memory is keyed on it. */
+  barcode:          string | null;
   kind:             LineKind;
   expenseCategory:  ExpenseCategory | null;
   confidence:       number;
@@ -126,6 +131,8 @@ export interface ParsedReceipt {
   total:           number | null;
   /** A voucher or discount that reduced what was paid. Spread by spreadDiscount, never posted as a line. */
   discount:        number | null;
+  /** The item count the receipt prints for itself ("Total Items: 8"), the till's own cross-check. */
+  itemCount:       number | null;
   lines:           ParsedLine[];
 }
 
@@ -192,6 +199,25 @@ export function toNumber(v: unknown): number | null {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** The digits of a printed barcode (EAN-8 to GTIN-14), or null for anything else. */
+export function toBarcode(v: unknown): string | null {
+  if (typeof v !== 'string' && typeof v !== 'number') return null;
+  const digits = String(v).replace(/\D/g, '');
+  return digits.length >= 8 && digits.length <= 14 ? digits : null;
+}
+
+/**
+ * How the shop's memory files a printed line: by barcode when one was printed
+ * (it survives any abbreviation), else by the printed text, normalised. The
+ * text key is kept beside the barcode key so a later receipt that prints the
+ * same text with the barcode unread still finds the row.
+ */
+export function aliasKeys(line: { description: string; barcode?: string | null }): { key: string; printedKey: string } {
+  const printedKey = normalizeName(line.description);
+  const barcode = toBarcode(line.barcode);
+  return { key: barcode ? `bc:${barcode}` : `tx:${printedKey}`, printedKey };
+}
+
 /**
  * Turn the model's text into a receipt, salvaging the first {...} block if it
  * wrapped the JSON in prose. Shape is enforced here so nothing downstream has
@@ -228,6 +254,7 @@ export function parseReceiptJson(text: string): ParsedReceipt {
       unit:            str(r.unit),
       unitPrice:       toNumber(r.unitPrice),
       lineTotal:       toNumber(r.lineTotal),
+      barcode:         toBarcode(r.barcode),
       kind,
       expenseCategory: kind === 'expense' ? (expenseCategory ?? 'OTHER') : null,
       confidence:      conf == null ? 0 : Math.max(0, Math.min(1, conf)),
@@ -236,6 +263,7 @@ export function parseReceiptJson(text: string): ParsedReceipt {
 
   const dateIso = str(o.dateIso);
   const discount = toNumber(o.discount);
+  const itemCount = toNumber(o.itemCount);
   return {
     vendor:          str(o.vendor),
     dateText:        str(o.dateText),
@@ -243,8 +271,26 @@ export function parseReceiptJson(text: string): ParsedReceipt {
     referenceNumber: str(o.referenceNumber),
     total:           toNumber(o.total),
     discount:        discount != null && discount > 0 ? discount : null,
+    itemCount:       itemCount != null && itemCount > 0 ? Math.round(itemCount) : null,
     lines,
   };
+}
+
+/** Units a till weighs rather than counts: such a line is ONE item however heavy. */
+const WEIGHED_UNITS = new Set(['kg', 'g', 'l', 'ml', 'lb', 'oz']);
+
+/**
+ * How many items the lines add up to, counted the way a till counts them: a
+ * count line is its count, a weighed line is one item, a line with no count
+ * printed is one. Set beside the receipt's own "Total Items", it says whether
+ * a line was missed or doubled -- the one check the reader cannot fudge.
+ */
+export function itemsOnReceipt(lines: ParsedLine[]): number {
+  return lines.filter((l) => l.kind !== 'expense').reduce((n, l) => {
+    const unit = l.unit ? normUnit(l.unit) : '';
+    if (WEIGHED_UNITS.has(unit) || l.quantity == null || !(l.quantity > 0)) return n + 1;
+    return n + Math.round(l.quantity);
+  }, 0);
 }
 
 // ── matching a printed line to an ingredient ────────────────────────────────
@@ -552,6 +598,7 @@ export const RECEIPT_RESPONSE_SCHEMA: Record<string, unknown> = {
     referenceNumber: STR_OR_NULL,
     total:           NUM_OR_NULL,
     discount:        NUM_OR_NULL,
+    itemCount:       NUM_OR_NULL,
     lines: {
       type: 'ARRAY',
       items: {
@@ -562,13 +609,14 @@ export const RECEIPT_RESPONSE_SCHEMA: Record<string, unknown> = {
           unit:            STR_OR_NULL,
           unitPrice:       NUM_OR_NULL,
           lineTotal:       NUM_OR_NULL,
+          barcode:         STR_OR_NULL,
           kind:            { type: 'STRING', enum: ['ingredient', 'supply', 'expense'] },
           expenseCategory: { type: 'STRING', nullable: true, enum: [...EXPENSE_CATEGORIES] },
           confidence:      { type: 'NUMBER' },
         },
-        required: ['description', 'quantity', 'unit', 'unitPrice', 'lineTotal', 'kind', 'expenseCategory', 'confidence'],
+        required: ['description', 'quantity', 'unit', 'unitPrice', 'lineTotal', 'barcode', 'kind', 'expenseCategory', 'confidence'],
       },
     },
   },
-  required: ['vendor', 'dateText', 'dateIso', 'referenceNumber', 'total', 'discount', 'lines'],
+  required: ['vendor', 'dateText', 'dateIso', 'referenceNumber', 'total', 'discount', 'itemCount', 'lines'],
 };

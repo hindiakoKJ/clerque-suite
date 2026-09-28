@@ -31,6 +31,8 @@ describe('ProcureReceiptsService', () => {
     twin?: { id: string; name: string; isActive: boolean } | null;
     /** Lines already on other lists at the shop: { rawMaterialId, receivedAt, packsBought, purchaseRequest: { tenantId, branchId, status, requestNumber, notes } }. */
     otherLists?: any[];
+    /** What the shop remembers: { tenantId, key, printedKey, rawMaterialId, packSize, brandNote }. */
+    aliases?: any[];
   } = {}) {
     const requests: any[] = [];
     if (opts.kitchen) requests.push(opts.kitchen);
@@ -38,11 +40,18 @@ describe('ProcureReceiptsService', () => {
     const entries: any[] = [];
     const docs: any[] = [];
     const createdMaterials: any[] = [];
+    const remembered: any[] = [];
     let seq = 0;
 
     const prisma: any = {
       branch: { findFirst: jest.fn().mockResolvedValue({ id: BRANCH }) },
       auditLog: { findMany: jest.fn().mockResolvedValue([]) },
+      receiptAlias: {
+        // Applies the query's own filter, so what it asks for is what is checked.
+        findMany: jest.fn().mockImplementation(({ where }: any) => Promise.resolve((opts.aliases ?? []).filter((a: any) =>
+          a.tenantId === where.tenantId && (where.OR[0].key.in.includes(a.key) || where.OR[1].printedKey.in.includes(a.printedKey))))),
+        upsert: jest.fn().mockImplementation((args: any) => { remembered.push(args); return Promise.resolve(args.create); }),
+      },
       rawMaterial: {
         findMany:  jest.fn().mockResolvedValue(MATERIALS),
         findFirst: jest.fn().mockImplementation(({ where }: any) => {
@@ -131,7 +140,7 @@ describe('ProcureReceiptsService', () => {
     };
 
     const svc = new ProcureReceiptsService(prisma, inventory, procure, ai, documents);
-    return { svc, prisma, inventory, ai, received, entries, docs, requests, createdMaterials };
+    return { svc, prisma, inventory, ai, received, entries, docs, requests, createdMaterials, remembered };
   }
 
   const READING = JSON.stringify({
@@ -894,4 +903,85 @@ describe('ProcureReceiptsService', () => {
       expect(prisma.purchaseRequestLine.findMany).not.toHaveBeenCalled();
     });
   });
+
+/**
+ * The shop remembers what it tagged.
+ *
+ * A supermarket prints "ANGELINA NO SUGAR AD 04806503950622": an abbreviation
+ * no name matcher can place, under a barcode that never changes. The first
+ * time somebody picks the ingredient and posts, that is filed under the
+ * barcode with the pack size; the next receipt from that shelf comes back
+ * already tagged, no "one holds" question.
+ */
+describe('the shop remembers what it tagged', () => {
+  const ANGELINA = { tenantId: TENANT, key: 'bc:04806503950622', printedKey: 'angelina no sugar ad', rawMaterialId: 'milk', packSize: 1000, brandNote: null };
+  const ROBINSONS = JSON.stringify({
+    vendor: 'Robinsons Supermarket', dateIso: '2026-09-01', total: 322, itemCount: 3,
+    lines: [
+      { description: 'ANGELINA NO SUGAR AD', quantity: 2, unit: null, unitPrice: 106, lineTotal: 212, barcode: '04806503950622', kind: 'ingredient', confidence: 0.95 },
+      { description: 'GRDN HF WHEAT BRD 60', quantity: 1, unit: null, unitPrice: null, lineTotal: 110, barcode: '04806502720301', kind: 'ingredient', confidence: 0.9 },
+    ],
+  });
+
+  it('matches a line by its barcode to what was tagged before, pack size included, and says so', async () => {
+    const { svc } = build({ aiText: ROBINSONS, aliases: [ANGELINA] });
+    const r = await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=' });
+    expect(r.lines[0]).toMatchObject({
+      remembered: true,
+      match: { rawMaterialId: 'milk', score: 1 },
+      pack:  { packsBought: 2, packCost: 106, packSize: 1000, needsPackSize: false },
+    });
+    expect(r.lines[0].pack?.note).toMatch(/Remembered/);
+    // An abbreviation the name matcher cannot place stays a question, as before.
+    expect(r.lines[1]).toMatchObject({ remembered: false, match: null });
+    expect(r.summary).toMatchObject({ remembered: 1, printedItems: 3, itemsRead: 3, itemsMatch: true });
+  });
+
+  it('falls back to the printed text when the barcode was not read', async () => {
+    const noCode = JSON.stringify({ lines: [
+      { description: 'ANGELINA NO SUGAR AD', quantity: 2, unitPrice: 106, lineTotal: 212, barcode: null, kind: 'ingredient', confidence: 0.9 },
+    ] });
+    const { svc } = build({ aiText: noCode, aliases: [ANGELINA] });
+    const r = await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=' });
+    expect(r.lines[0]).toMatchObject({ remembered: true, match: { rawMaterialId: 'milk' } });
+  });
+
+  it('ignores a memory that points at an ingredient no longer on the list', async () => {
+    const { svc } = build({ aiText: ROBINSONS, aliases: [{ ...ANGELINA, rawMaterialId: 'gone' }] });
+    const r = await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=' });
+    expect(r.lines[0].remembered).toBe(false);
+  });
+
+  it('learns what was tagged when the receipt is posted: under the barcode, with the pack size', async () => {
+    const { svc, remembered } = build();
+    await svc.confirm(TENANT, USER, BRANCH, { paymentMethod: 'CASH', receiptDate: '2026-09-01', lines: [
+      { rawMaterialId: 'milk',  packsBought: 2, packSize: 1000, packCost: 106, printedText: 'ANGELINA NO SUGAR AD', barcode: '04806503950622' },
+      { rawMaterialId: 'sugar', packsBought: 1, packSize: 1000, packCost: 85 },   // typed by hand: nothing printed to remember
+    ] } as any);
+    expect(remembered).toHaveLength(1);
+    expect(remembered[0].where).toEqual({ tenantId_key: { tenantId: TENANT, key: 'bc:04806503950622' } });
+    expect(remembered[0].create).toMatchObject({ rawMaterialId: 'milk', barcode: '04806503950622', printedKey: 'angelina no sugar ad', printedText: 'ANGELINA NO SUGAR AD', createdById: USER });
+    expect(Number(remembered[0].create.packSize)).toBe(1000);
+    expect(remembered[0].update).toMatchObject({ rawMaterialId: 'milk', timesUsed: { increment: 1 } });
+  });
+
+  it('remembers a line that created a new ingredient, under the id it was given', async () => {
+    const { svc, remembered } = build();
+    await svc.confirm(TENANT, USER, BRANCH, { paymentMethod: 'CASH', receiptDate: '2026-09-01', lines: [
+      { create: { name: 'Wheat bread', unit: 'pc', category: 'INGREDIENT' }, packsBought: 1, packSize: 1, packCost: 110, printedText: 'GRDN HF WHEAT BRD 60', barcode: '04806502720301' },
+    ] } as any);
+    expect(remembered).toHaveLength(1);
+    expect(remembered[0].create).toMatchObject({ rawMaterialId: 'new-wheat-bread', key: 'bc:04806502720301' });
+  });
+
+  it('never fails a posting over a memory that could not be written', async () => {
+    const { svc, prisma } = build();
+    prisma.receiptAlias.upsert.mockRejectedValue(new Error('db away'));
+    const r = await svc.confirm(TENANT, USER, BRANCH, { paymentMethod: 'CASH', receiptDate: '2026-09-01', lines: [
+      { rawMaterialId: 'milk', packsBought: 2, packSize: 1000, packCost: 106, printedText: 'ANGELINA NO SUGAR AD', barcode: '04806503950622' },
+    ] } as any);
+    expect(r.posted.length + r.failed.length).toBeGreaterThan(0);
+  });
+});
+
 });

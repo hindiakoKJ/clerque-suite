@@ -1,7 +1,6 @@
 import {
   toNumber, parseReceiptJson, normalizeName, tokens, scoreMatch, matchIngredient, derivePack,
-  MATCH_THRESHOLD, MaterialRef, ParsedLine,
-} from './receipt-parser';
+  MATCH_THRESHOLD, MaterialRef, ParsedLine, toBarcode, aliasKeys, itemsOnReceipt } from './receipt-parser';
 
 /**
  * The half of the receipt reader that has to be right without an API key.
@@ -29,7 +28,7 @@ const SHOP: MaterialRef[] = [
 ];
 
 const line = (over: Partial<ParsedLine>): ParsedLine => ({
-  description: 'x', quantity: null, unit: null, unitPrice: null, lineTotal: null,
+  description: 'x', quantity: null, unit: null, unitPrice: null, lineTotal: null, barcode: null,
   kind: 'ingredient', expenseCategory: null, confidence: 0.9, ...over,
 });
 
@@ -347,5 +346,39 @@ describe('derivePack — from what the receipt printed to what goes on the shelf
     const p = derivePack(line({ quantity: 2, lineTotal: 170, unit: 'kg' }), M('s', 'Sugar', 'g'));
     expect(p.packCost).toBe(85);
     expect(p.packSize).toBe(1000);
+  });
+});
+
+describe('what the shop\'s memory is keyed on', () => {
+  it('reads a barcode as digits only and refuses anything that is not one', () => {
+    expect(toBarcode('04806503950622')).toBe('04806503950622');
+    expect(toBarcode('4806 5039 50622')).toBe('4806503950622');
+    expect(toBarcode(48008881)).toBe('48008881');         // an EAN-8, however it was typed
+    expect(toBarcode('19677')).toBeNull();                   // too short to be a product code
+    expect(toBarcode('not a code')).toBeNull();
+    expect(toBarcode(null)).toBeNull();
+  });
+
+  it('files a line under its barcode when one was printed, else under its text, and keeps the text key either way', () => {
+    expect(aliasKeys({ description: 'ANGELINA NO SUGAR AD', barcode: '04806503950622' }))
+      .toEqual({ key: 'bc:04806503950622', printedKey: 'angelina no sugar ad' });
+    expect(aliasKeys({ description: '  Sany Swets  Diced Ube ', barcode: null }))
+      .toEqual({ key: 'tx:sany swets diced ube', printedKey: 'sany swets diced ube' });
+  });
+});
+
+describe('the till\'s own item count', () => {
+  it('reads the printed count and counts the lines the way a till does', () => {
+    const r = parseReceiptJson(JSON.stringify({ itemCount: 8, lines: [
+      { description: 'ANGELINA NO SUGAR AD', quantity: 2, unit: null, lineTotal: 212 },
+      { description: 'GRDN HF WHEAT BRD 60', quantity: 1, lineTotal: 110 },
+      { description: 'LAURAS BREADSTICKS', quantity: null, lineTotal: 37 },      // no count printed: one item
+      { description: 'rob pal beef filipin', quantity: 8.14, unit: 'kg', unitPrice: 440, lineTotal: 3581.6 },   // weighed: one item
+      { description: 'Delivery', lineTotal: 50, kind: 'expense' },              // not an item
+    ] }));
+    expect(r.itemCount).toBe(8);
+    expect(itemsOnReceipt(r.lines)).toBe(5);
+    expect(parseReceiptJson('{"itemCount": 0, "lines": []}').itemCount).toBeNull();
+    expect(parseReceiptJson('{"lines": []}').itemCount).toBeNull();
   });
 });

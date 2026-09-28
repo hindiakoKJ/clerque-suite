@@ -376,6 +376,43 @@ const COUNTABLE = new Set(['pc', 'pcs', 'piece', 'pack', 'bottle', 'can', 'box',
 
 const money = (n: number) => 'P' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
+/**
+ * A pack size printed inside the description: "BROWN SUGAR 1KG", "CREAM 250ML",
+ * "MILK 1.5L", "EGGS TRAY 30S", "HOT CUP 12OZ 50S". The reader is told that
+ * such a figure is the pack size and not the quantity, so it arrives in the
+ * description alone; this reads it back out, in the shelf's unit.
+ *
+ * The last figure that converts to the shelf unit wins: "12OZ 50S" on a
+ * piece-counted shelf is 50 (the ounces describe the cup, the 50 the sleeve),
+ * and on a millilitre shelf it is the 12 oz, the count being no use there.
+ * A figure that converts to nothing on this shelf is left alone: "MILK 1L"
+ * on a shelf that counts bottles is one bottle, not a guess at litres.
+ */
+export function packSizeFromDescription(description: string, shelfUnit: string): number | null {
+  const shelf = normUnit(shelfUnit);
+  const re = /(\d+(?:\.\d+)?)\s*(kgs?|kilos?|gms?|grams?|g|ltrs?|liters?|litres?|l|ml|oz|lbs?|pcs?|pieces?|s)\b/gi;
+  let found: number | null = null;
+  for (const m of String(description ?? '').matchAll(re)) {
+    const size = Number(m[1]);
+    if (!(size > 0)) continue;
+    const raw = m[2].toLowerCase();
+    const unit = /^(pcs?|pieces?|s)$/.test(raw) ? 'pc'
+      : /^(kgs?|kilos?)$/.test(raw) ? 'kg'
+      : /^(gms?|grams?)$/.test(raw) ? 'g'
+      : /^(ltrs?|liters?|litres?)$/.test(raw) ? 'l'
+      : /^lbs?$/.test(raw) ? 'lb'
+      : raw;
+    if (unit === 'pc') {
+      if (shelf === 'pc') found = size;
+      continue;
+    }
+    if (normUnit(unit) === shelf) { found = size; continue; }
+    const f = unitFactor(unit, shelf);
+    if (f != null) found = +(size * f).toFixed(4);
+  }
+  return found;
+}
+
 export interface PackSuggestion {
   packsBought:   number | null;
   /** How many of the ingredient's unit one printed unit holds. Null = ask. */
@@ -390,9 +427,7 @@ export interface PackSuggestion {
  * the way the importer does -- arithmetic where the units are the same kind,
  * a question where they are not -- and never a guess at density.
  */
-export function derivePack(line: ParsedLine, material: MaterialRef): PackSuggestion {
-  const printedUnit = line.unit ? normUnit(line.unit) : '';
-  const shelfUnit   = normUnit(material.unit);
+export function derivePack(line: ParsedLine, material: MaterialRef | null): PackSuggestion {
 
   /*
     A price read as 0 is a price not read. The reader returns 0 for an
@@ -435,6 +470,29 @@ export function derivePack(line: ParsedLine, material: MaterialRef): PackSuggest
     }
   }
 
+  /*
+    No ingredient chosen yet: the figures the paper printed still stand. The
+    count and the price each are the receipt's, whoever the line turns out to
+    be; only how much one holds waits for the ingredient. Before this the
+    whole suggestion was dropped for an unmatched line, so a receipt full of
+    items the matcher did not know came onto the screen with every price
+    blank -- read correctly, then thrown away.
+  */
+  if (!material) {
+    return { packsBought, packSize: null, packCost, needsPackSize: true, note };
+  }
+  const printedUnit = line.unit ? normUnit(line.unit) : '';
+  const shelfUnit   = normUnit(material.unit);
+  /*
+    When the quantity counts packs (no unit printed, or a countable one), the
+    pack's own size is often printed in the description: "BROWN SUGAR 1KG",
+    bought 2, is two packs of 1000 g. A weighed line (1.25 kg) never is.
+  */
+  const countsPacks   = !printedUnit || COUNTABLE.has(printedUnit);
+  const inDescription = countsPacks ? packSizeFromDescription(line.description, shelfUnit) : null;
+  const fromDescription = (unitWord: string) =>
+    `One ${unitWord} holds ${inDescription} ${material.unit}, from the size printed on the receipt.`;
+
   if (printedUnit && printedUnit === shelfUnit) {
     packSize = 1;
   } else if (printedUnit) {
@@ -445,9 +503,15 @@ export function derivePack(line: ParsedLine, material: MaterialRef): PackSuggest
       packSize = +f.toFixed(4);
       note = [note, `${line.unit} on the receipt, ${material.unit} on the shelf: 1 ${line.unit} = ${packSize} ${material.unit}.`]
         .filter(Boolean).join(' ');
+    } else if (inDescription != null) {
+      packSize = inDescription;
+      note = [note, fromDescription(line.unit!)].filter(Boolean).join(' ');
     } else {
       note = `The receipt says ${line.unit} but ${material.name} is counted in ${material.unit}. How many ${material.unit} is one ${line.unit}?`;
     }
+  } else if (inDescription != null && !(COUNTABLE.has(shelfUnit) && inDescription === 1)) {
+    packSize = inDescription;
+    note = [note, fromDescription('item')].filter(Boolean).join(' ');
   } else if (COUNTABLE.has(shelfUnit)) {
     // No unit printed and the shelf counts whole things: one line item is one thing.
     packSize = 1;
@@ -463,3 +527,48 @@ export function derivePack(line: ParsedLine, material: MaterialRef): PackSuggest
     note,
   };
 }
+
+// ── the shape the reader is held to ─────────────────────────────────────────
+
+/**
+ * The receipt JSON as a Gemini response schema (Vertex's OBJECT/STRING/NUMBER
+ * dialect, `nullable` for a figure that is not printed). It mirrors the shape
+ * in RECEIPT_LINES_SYSTEM_PROMPT exactly; the prompt still describes each
+ * field, because the schema says what type a value is, not what it means.
+ *
+ * Why both: asked in prose alone, a model that read "1.250 KG" sometimes put
+ * that string in `quantity`, and toNumber rightly threw it away -- the weight
+ * was read and then lost. Held to a schema, the field is a number or null.
+ * The enum values are the ones parseReceiptJson already accepts.
+ */
+const NUM_OR_NULL = { type: 'NUMBER', nullable: true } as const;
+const STR_OR_NULL = { type: 'STRING', nullable: true } as const;
+export const RECEIPT_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: 'OBJECT',
+  properties: {
+    vendor:          STR_OR_NULL,
+    dateText:        STR_OR_NULL,
+    dateIso:         STR_OR_NULL,
+    referenceNumber: STR_OR_NULL,
+    total:           NUM_OR_NULL,
+    discount:        NUM_OR_NULL,
+    lines: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          description:     { type: 'STRING' },
+          quantity:        NUM_OR_NULL,
+          unit:            STR_OR_NULL,
+          unitPrice:       NUM_OR_NULL,
+          lineTotal:       NUM_OR_NULL,
+          kind:            { type: 'STRING', enum: ['ingredient', 'supply', 'expense'] },
+          expenseCategory: { type: 'STRING', nullable: true, enum: [...EXPENSE_CATEGORIES] },
+          confidence:      { type: 'NUMBER' },
+        },
+        required: ['description', 'quantity', 'unit', 'unitPrice', 'lineTotal', 'kind', 'expenseCategory', 'confidence'],
+      },
+    },
+  },
+  required: ['vendor', 'dateText', 'dateIso', 'referenceNumber', 'total', 'discount', 'lines'],
+};

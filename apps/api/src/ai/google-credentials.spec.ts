@@ -122,17 +122,20 @@ describe('parseGoogleCredentials — absent is not broken', () => {
   });
 });
 
+// No string here may match a real key's shape (AIza + 35 chars): the repo is public and
+// GitHub's secret scanner raised an alert on a made-up one. The parser only needs a value
+// that is neither JSON nor base64.
 describe('parseGoogleCredentials — what it refuses, and how plainly', () => {
   const cases: Array<[string, string, RegExp]> = [
     ['plain junk',             'not-a-key-at-all',                                  /neither JSON nor base64/i],
-    ['a bare API key',         'AIzaSyB-notarealkey-0000000000000000000',            /neither JSON nor base64/i],
+    ['a bare API key',         'apikey-notarealkey-0000000000000000000',            /neither JSON nor base64/i],
     ['base64 of junk',         b64('hello there'),                                  /neither JSON nor base64/i],
     ['truncated JSON',         '{"client_email":"a@b.c","private_key":"x"',          /not valid JSON/i],
     ['a JSON list',            '["service_account"]',                               /not a list/i],
     ['no client_email',        keyFile({ client_email: undefined }),                /client_email/],
     ['a blank client_email',   keyFile({ client_email: '   ' }),                    /client_email/],
     ['no private_key',         keyFile({ private_key: undefined }),                 /private_key/],
-    ['a non-PEM private_key',  keyFile({ private_key: 'AIzaSyB-notarealkey' }),     /not a PEM key/i],
+    ['a non-PEM private_key',  keyFile({ private_key: 'apikey-notarealkey' }),     /not a PEM key/i],
   ];
 
   it.each(cases)('refuses %s, naming the variable', (_label, raw, expected) => {

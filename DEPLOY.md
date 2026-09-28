@@ -392,7 +392,7 @@ download.
 | `AI_FEATURES_ENABLED` | `true` | The master switch. Anything but the exact string `true` leaves AI off, so a typo fails closed. |
 | `AI_PROVIDER` | `gemini` | Who does the reading. `anthropic` is the other option and needs `ANTHROPIC_API_KEY` instead. |
 | `GOOGLE_CREDENTIALS_JSON` | the whole key file from 7a.4, **or** that file base64-encoded | How Vertex signs its requests. |
-| `GOOGLE_CLOUD_LOCATION` | `us-central1` | The region. Optional — this is the default. |
+| `GOOGLE_CLOUD_LOCATION` | `global` | Optional — this is the default. Gemini 3 Flash (3.5–3.8) is served from the **global** endpoint only; a region such as `us-central1` serves just the 2.5 family, which Google retires on 16 October 2026. |
 | `GEMINI_MODEL` | `gemini-3.8-flash` | Optional — this is the default. Set it the day Google retires 3.8 Flash. |
 | `GOOGLE_CLOUD_PROJECT` | the project id | Optional. The key file already names its project; set this only to point at a different one. |
 

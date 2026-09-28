@@ -136,6 +136,16 @@ describe('callGemini — what comes back', () => {
     expect(out.outputTokens).toBe(520);
   });
 
+  it('asks for structured output in the given shape, and for plain text when no shape is given', async () => {
+    const { client: c, generateContent } = client({ text: '{"lines":[]}' });
+    const schema = { type: 'OBJECT', properties: { lines: { type: 'ARRAY', items: { type: 'STRING' } } } };
+    await callGemini(c, { model: 'gemini-3.8-flash', messages: [], responseSchema: schema });
+    expect(generateContent.mock.calls[0][0].config).toMatchObject({ responseMimeType: 'application/json', responseSchema: schema });
+    await callGemini(c, { model: 'gemini-3.8-flash', messages: [] });
+    expect(generateContent.mock.calls[1][0].config).not.toHaveProperty('responseMimeType');
+    expect(generateContent.mock.calls[1][0].config).not.toHaveProperty('responseSchema');
+  });
+
   it('leaves the system instruction out entirely when there is none', async () => {
     const { client: c, generateContent } = client({ text: 'x' });
     await callGemini(c, { model: 'gemini-3.8-flash', messages: [] });

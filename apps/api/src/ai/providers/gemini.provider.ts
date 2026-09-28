@@ -16,7 +16,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 // Types only — importing a VALUE from this module would make the SDK a load-time
 // dependency of the translator, and ai.vertex-only.spec.ts mocks it to a stub.
-import type { GoogleGenAI, ThinkingConfig, ThinkingLevel } from '@google/genai';
+import type { GoogleGenAI, Schema, ThinkingConfig, ThinkingLevel } from '@google/genai';
 
 /** What every provider hands back, whatever it was asked in. */
 export interface ProviderResult {
@@ -198,6 +198,8 @@ export async function callGemini(
     messages:      Anthropic.MessageParam[];
     systemPrompt?: string;
     maxTokens?:    number;
+    /** When given, the answer is structured output in exactly this shape. */
+    responseSchema?: Record<string, unknown>;
   },
 ): Promise<ProviderResult> {
   const maxOutputTokens = outputTokenCeiling(args.model, args.maxTokens);
@@ -209,6 +211,15 @@ export async function callGemini(
       ...(args.systemPrompt ? { systemInstruction: args.systemPrompt } : {}),
       maxOutputTokens,
       thinkingConfig: thinkingConfigFor(args.model),
+      /*
+        Structured output. The model is held to the schema: keys typed, a
+        missing figure is null, no prose and no code fence around the JSON.
+        A receipt reader that got "1.250 KG" back in a number field lost the
+        quantity at parse time; this shape makes that answer impossible.
+      */
+      ...(args.responseSchema
+        ? { responseMimeType: 'application/json', responseSchema: args.responseSchema as Schema }
+        : {}),
     },
   });
 

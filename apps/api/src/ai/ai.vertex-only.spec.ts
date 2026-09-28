@@ -81,9 +81,16 @@ describe('The Gemini client is built for Vertex', () => {
     expect((opts as { vertexai: boolean }).vertexai).toBe(true);
   });
 
-  it('defaults the region rather than leaving it undefined', () => {
+  // Gemini 3 Flash is served from the global endpoint only: every 3.x id
+  // answered 404 from us-central1 while the same ids answered from global.
+  it('defaults to the global endpoint rather than a region', () => {
     const [opts] = build({ GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: undefined });
-    expect((opts as { location: string }).location).toBe('us-central1');
+    expect((opts as { location: string }).location).toBe('global');
+  });
+
+  it('treats an emptied GOOGLE_CLOUD_LOCATION as unset: Railway leaves a blank string behind', () => {
+    const [opts] = build({ GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CLOUD_LOCATION: '  ' });
+    expect((opts as { location: string }).location).toBe('global');
   });
 
   it('builds no client at all without a project, instead of guessing one', () => {
@@ -167,7 +174,7 @@ describe('Vertex signs in with a key from the environment', () => {
 
   it('changes nothing when the variable is absent — the file path still works locally', () => {
     const opts = build({ GOOGLE_CLOUD_PROJECT: 'p', GOOGLE_CREDENTIALS_JSON: undefined });
-    expect(opts).toEqual({ vertexai: true, project: 'p', location: 'us-central1' });
+    expect(opts).toEqual({ vertexai: true, project: 'p', location: 'global' });
   });
 
   /*

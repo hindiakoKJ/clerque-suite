@@ -248,6 +248,37 @@ describe('matching a printed line to the shop\'s own ingredient', () => {
 });
 
 describe('derivePack — from what the receipt printed to what goes on the shelf', () => {
+  it('keeps the printed count and price for a line no ingredient was matched to, and asks for the size', () => {
+    // Before: an unmatched line had no pack at all, so its price never reached the screen.
+    const p = derivePack(line({ quantity: 3, unit: 'pcs', unitPrice: 58.5, lineTotal: 175.5 }), null);
+    expect(p).toMatchObject({ packsBought: 3, packCost: 58.5, packSize: null, needsPackSize: true });
+    const t = derivePack(line({ lineTotal: 255 }), null);            // one money figure, no count
+    expect(t).toMatchObject({ packsBought: 1, packCost: 255, packSize: null });
+  });
+
+  it('reads the pack size printed in the description, in the shelf\'s unit', () => {
+    // "BROWN SUGAR 1KG  62.00": one money figure, no count, no unit -- the 1KG is what one holds.
+    const sugar = derivePack(line({ description: 'BROWN SUGAR 1KG', lineTotal: 62 }), M('s', 'Brown Sugar', 'g'));
+    expect(sugar).toMatchObject({ packsBought: 1, packSize: 1000, packCost: 62, needsPackSize: false });
+    // "3 @ 58.50" of 250 ml on a millilitre shelf: three packs of 250.
+    const cream = derivePack(line({ description: 'NESTLE ALL PURPOSE CREAM 250ML', quantity: 3, unitPrice: 58.5, lineTotal: 175.5 }), M('c', 'All-purpose cream', 'ml'));
+    expect(cream).toMatchObject({ packsBought: 3, packSize: 250, packCost: 58.5 });
+    // A litre on a millilitre shelf converts; a tray of 30 on a piece shelf is 30.
+    expect(derivePack(line({ description: 'MAGNOLIA FRESH MILK 1L', quantity: 2, unitPrice: 89 }), M('m', 'Fresh Milk', 'ml')).packSize).toBe(1000);
+    expect(derivePack(line({ description: 'EGGS MEDIUM TRAY 30S', unit: 'tray', lineTotal: 255 }), M('e', 'Egg', 'pc')).packSize).toBe(30);
+    // The last figure that fits the shelf wins: 12 oz describes the cup, 50 the sleeve.
+    expect(derivePack(line({ description: 'PAPER HOT CUP 12OZ 50S', quantity: 4, unitPrice: 145 }), M('h', 'Hot Cup 12oz', 'pc')).packSize).toBe(50);
+  });
+
+  it('never forces a printed size onto a shelf it does not convert to', () => {
+    // A shop that counts milk in bottles: 1L is one bottle, not a guess.
+    const p = derivePack(line({ description: 'MAGNOLIA FRESH MILK 1L', quantity: 2, unitPrice: 89 }), M('m', 'Fresh Milk', 'pc'));
+    expect(p).toMatchObject({ packSize: 1, needsPackSize: false });
+    // A weighed line has no pack: 1.25 kg is 1250 g whatever the description says.
+    const w = derivePack(line({ description: 'CHICKEN BREAST 500G', quantity: 1.25, unit: 'kg', unitPrice: 195, lineTotal: 243.75 }), M('b', 'Chicken breast', 'g'));
+    expect(w.packSize).toBe(1000);
+  });
+
   it('a kilo on the receipt is 1000 g on a gram-counted shelf', () => {
     const p = derivePack(line({ quantity: 5.81, unit: 'KG', unitPrice: 195, lineTotal: 1132.95 }), M('b', 'Chicken breast', 'g'));
     expect(p).toMatchObject({ packsBought: 5.81, packSize: 1000, packCost: 195, needsPackSize: false });

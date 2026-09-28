@@ -9,7 +9,7 @@ import { ProcurePocket } from './dto/receive-request.dto';
 import { PH_TIMEZONE, cleanSourceName, isSourceKind, sourceKey, type SourceKind } from '@repo/shared-types';
 import {
   promptFor, parseReceiptJson, matchIngredient, derivePack, spreadDiscount, scoreMatch, tokens,
-  MaterialRef, ParsedLine, MatchResult, Candidate,
+  MaterialRef, ParsedLine, MatchResult, Candidate, RECEIPT_RESPONSE_SCHEMA,
 } from './receipt-parser';
 import { idsInARecipe } from '../inventory/recipe-use';
 import { ParseReceiptDto, ConfirmReceiptDto, ReceiptStockLineDto } from './dto/receipts.dto';
@@ -153,6 +153,8 @@ export class ProcureReceiptsService {
       cacheSystem:  true,
       // A long market receipt is thirty lines; each is ~60 tokens of JSON.
       maxTokens:    2500,
+      // Gemini is held to this shape: a number is a number or null, never "1.250 KG".
+      jsonSchema:   RECEIPT_RESPONSE_SCHEMA,
       ...(provider ? { provider } : {}),
       messages: [{
         role: 'user',
@@ -222,7 +224,8 @@ export class ProcureReceiptsService {
           rawMaterialId: a.material.id, name: a.material.name, unit: a.material.unit, score: +a.score.toFixed(3),
           inRecipe: inRecipe.has(a.material.id),
         })),
-        pack: best ? derivePack(l, best.material) : null,
+        // The printed count and price stand whoever the line turns out to be; only the pack size waits for a match.
+        pack: l.kind === 'expense' ? null : derivePack(l, best?.material ?? null),
       };
     });
 
@@ -242,7 +245,8 @@ export class ProcureReceiptsService {
         matched:    lines.filter((l) => l.match).length,
         unmatched:  lines.filter((l) => l.kind !== 'expense' && !l.match).length,
         expenses:   lines.filter((l) => l.kind === 'expense').length,
-        needsPack:  lines.filter((l) => l.pack?.needsPackSize).length,
+        // An unmatched line is counted under "to pick", not here.
+        needsPack:  lines.filter((l) => l.match && l.pack?.needsPackSize).length,
         linesTotal: +linesTotal.toFixed(2),
         // A total that does not foot to its lines is the reader missing a line
         // or reading a subtotal as the total. Either way, worth a look.

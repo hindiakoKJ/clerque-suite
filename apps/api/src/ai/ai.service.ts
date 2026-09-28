@@ -80,8 +80,8 @@ export const AI_PROVIDER: AiProvider =
   Google moves the pointer between releases. Google's own guidance is that
   production names a stable model.
 
-  gemini-3.8-flash has been GA since 2 September 2026, with no preview suffix,
-  and it is the current Flash on Vertex. The number WILL age; when it does,
+  gemini-3.8-flash is the current GA Flash on Vertex, served from the GLOBAL
+  endpoint (see the location note in the constructor). The number WILL age; when it does,
   set GEMINI_MODEL and restart. That is a deliberate trade: a variable someone
   has to update beats a call that fails on a day Google changed an alias.
 */
@@ -169,6 +169,14 @@ interface CallParams {
    * receipt can be put through both and compared; leave it unset otherwise.
    */
   provider?: AiProvider;
+  /**
+   * The JSON shape the answer must take (Gemini's responseSchema, in the
+   * OBJECT/STRING/NUMBER dialect). Honoured by Gemini as structured output:
+   * every field typed, nothing wrapped in prose or fences, a number never
+   * returned as "1.250 KG". Anthropic is asked in the prompt instead and
+   * ignores this.
+   */
+  jsonSchema?: Record<string, unknown>;
 }
 
 @Injectable()
@@ -223,7 +231,14 @@ export class AiService {
     // The key file names its own project, so GOOGLE_CLOUD_PROJECT is only
     // needed when it disagrees or when the key came from elsewhere.
     const project  = process.env.GOOGLE_CLOUD_PROJECT?.trim() || credentials?.project_id;
-    const location = process.env.GOOGLE_CLOUD_LOCATION ?? 'us-central1';
+    /*
+      `global`, not a region. Gemini 3 Flash (3.5 through 3.8) is served to this
+      project from the global endpoint only: every 3.x id answered 404 from
+      us-central1 while the same ids answered from global, and 2.5 Flash, the
+      only Flash a region would serve, retires on 16 October 2026. A region
+      is still honoured when set, for a shop that must keep its data in one.
+    */
+    const location = process.env.GOOGLE_CLOUD_LOCATION?.trim() || 'global';
     if (project && !credentialsBroken) {
       this.gemini = new GoogleGenAI({
         vertexai: true,
@@ -354,6 +369,7 @@ export class AiService {
           messages:     params.messages,
           systemPrompt: params.systemPrompt,
           maxTokens:    params.maxTokens,
+          responseSchema: params.jsonSchema,
         });
         inputTokens  = out.inputTokens;
         outputTokens = out.outputTokens;

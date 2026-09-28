@@ -206,10 +206,16 @@ product route; branch managers get the payroll roster without pay; salary
 figures redacted in the audit trail; signup throttled; refresh tokens live 7
 days; a departed pairer's tablet reads nothing.
 
-Deferred (each needs a schema change; ask KJ first): exact refresh-token
-revocation (a SHA-256 column), binding the access token to its session
-(`sid`) so one lost device can be signed out alone, a rolling life for
-paired-display tokens, per-user PIN lockout counters, line-level price
+On branch `session-security` (PR #33, one nullable column on
+`user_sessions`): access tokens carry their session (`sid`) and die with it
+at the next request, so one lost device can be signed out alone and "sign
+out everywhere" bites at once; refresh tokens are matched by SHA-256 digest
+(exact, indexed) instead of a bcrypt loop; a rotated refresh token presented
+again is refused within a minute (two tabs racing) and closes every session
+of that user after that (a copied token).
+
+Deferred: a rolling life for paired-display tokens (schema), per-user PIN
+lockout counters (today the counter is per shop by design), line-level price
 validation for POS callers (do **not** flip `enforceServerTotals` for POS:
 promos and price lists would break).
 
@@ -225,6 +231,7 @@ keeps outside the repo.
 ## 12. Open as of 28 September 2026
 
 - PR #32 (receipt memory + verdict) waits for KJ's "go"; merging deploys it.
+- PR #33 (session security) waits for KJ's "go" the same way.
 - KJ links his phone for Telegram alerts (Settings → Telegram alerts →
   "Make my link" → "Open Telegram" → Start).
 - Shop setup on the real Carolina tenant before staff start: supervisor PIN,

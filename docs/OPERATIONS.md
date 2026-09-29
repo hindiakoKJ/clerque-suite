@@ -260,6 +260,25 @@ keeps outside the repo.
 
 ## 12. Open as of 29 September 2026
 
+- **The database is on the wrong continent.** The API runs in Singapore
+  (`asia-southeast1`), Postgres in the Netherlands (`europe-west4`): 165 ms
+  per round trip (`probes/db-latency.js`). A sale takes 8–12 s, a stock
+  receive 2–14 s, a kitchen bump 2.5 s. One till and two tills at once passed
+  every sale (60/60 on 29 Sept); eight at once lost 8 of 16 to PRISMA_P2028
+  (transaction timeout). Fix: move Postgres to `asia-southeast1` in Railway,
+  **after** a backup exists (the nightly backup has never succeeded: the two
+  secrets in `hindiakoKJ/clerque-backups` are not set).
+- Stress test on cafe-carolina, 29 Sept: about 400 transactions (sales of
+  every payment kind and discount, voids, refunds, paid-outs, write-offs,
+  74 deliveries, a Procure receipt, kitchen bumps, nine Ledger entries, a
+  shift close with a shortage, Z-read, GCash and Maya settlement). All
+  accounting events posted, 409 entries balanced, trial balance to the
+  centavo, no stock below zero (`probes/books-check.js`).
+- KJ to decide: card money. Card sales debit 1031 like the wallets, but
+  Settlement does not take CARD, and a bank credit short by the card fee
+  comes out DISPUTED and is not booked. Recommendation: allow CARD, and book
+  a shortfall as bank charges when the owner marks it as the fee.
+
 - Merged 29 September: PR #32 (receipt memory + verdict, table `receipt_aliases`) and
   PR #33 (session security, column `user_sessions.refreshTokenSha`).
 - KJ links his phone for Telegram alerts (Settings → Telegram alerts →

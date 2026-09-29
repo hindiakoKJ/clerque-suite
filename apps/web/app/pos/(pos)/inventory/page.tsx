@@ -134,6 +134,10 @@ export default function InventoryPage() {
   const canEdit = user?.role === 'BUSINESS_OWNER' || user?.role === 'MDM'
                || user?.role === 'SUPER_ADMIN' || user?.role === 'WAREHOUSE_STAFF'
                || user?.role === 'BRANCH_MANAGER';
+  // A credit delivery needs a vendor, and only the owner on the full Ledger can
+  // read the vendor list (the API 403s everyone else, and every SIMPLE ledger).
+  // Anyone else would pick "On credit" and find nothing to pick after it.
+  const canReceiveOnCredit = user?.role === 'BUSINESS_OWNER' && (user?.planFeatures?.advancedAccounting ?? false);
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -1081,7 +1085,7 @@ export default function InventoryPage() {
                     className={INPUT_CLS}
                   >
                     <option value="CASH">Shop cash (not the POS drawer)</option>
-                    <option value="CREDIT">On credit (pay the supplier later)</option>
+                    {canReceiveOnCredit && <option value="CREDIT">On credit (pay the supplier later)</option>}
                     <option value="OWNER_FUNDED">Owner paid</option>
                   </select>
                 </div>

@@ -8,6 +8,7 @@ import { Prisma, PaymentMethod, SettlementStatus, OrderStatus } from '@prisma/cl
 import { CreateSettlementBatchDto } from './dto/create-settlement.dto';
 import { ConfirmSettlementDto } from './dto/confirm-settlement.dto';
 import { AddItemsToSettlementDto } from './dto/add-items-settlement.dto';
+import { DAY_MS, isManilaDay, manilaDayStart } from '../ingredient-reports/daily-usage';
 export { CreateSettlementBatchDto, ConfirmSettlementDto, AddItemsToSettlementDto };
 
 /**
@@ -19,6 +20,18 @@ export { CreateSettlementBatchDto, ConfirmSettlementDto, AddItemsToSettlementDto
  * order out of Settlement for good, so "Awaiting settlement" sat below the books.
  */
 export const SETTLEABLE_ORDER_STATUSES: OrderStatus[] = ['PAID', 'COMPLETED'];
+
+/**
+ * The period a batch covers, as [start, end). The screen sends plain dates
+ * (YYYY-MM-DD), which are whole Manila business days, the end day included;
+ * a full timestamp is taken as it is.
+ */
+export function settlementWindow(periodStart: string, periodEnd: string): { start: Date; end: Date } {
+  const start = isManilaDay(periodStart) ? manilaDayStart(periodStart) : new Date(periodStart);
+  const end = isManilaDay(periodEnd) ? new Date(manilaDayStart(periodEnd).getTime() + DAY_MS) : new Date(new Date(periodEnd).getTime() + 1);
+  if (!(end > start)) throw new BadRequestException('The period ends before it starts.');
+  return { start, end };
+}
 
 @Injectable()
 export class SettlementService {
@@ -94,19 +107,51 @@ export class SettlementService {
       throw new BadRequestException('Only digital payment methods can be settled in batches');
     }
 
-    return this.prisma.settlementBatch.create({
-      data: {
-        tenantId,
-        branchId: dto.branchId,
-        method: dto.method,
-        referenceNumber: dto.referenceNumber,
-        periodStart: new Date(dto.periodStart),
-        periodEnd: new Date(dto.periodEnd),
-        notes: dto.notes,
-        // expectedAmount will be computed when items are added
-        expectedAmount: new Prisma.Decimal(0),
-        status: 'PENDING',
-      },
+    const { start, end } = settlementWindow(dto.periodStart, dto.periodEnd);
+
+    // The batch takes every payment of its method, branch and period that no
+    // other batch holds yet. The Settlement screen has no step that picks them
+    // one by one, and a batch left expecting ₱0 turns any real bank credit into
+    // a dispute that never reaches the books.
+    return this.prisma.$transaction(async (tx) => {
+      const payments = await tx.orderPayment.findMany({
+        where: {
+          method: dto.method,
+          settlementItem: null,
+          order: {
+            tenantId,
+            branchId: dto.branchId,
+            status: { in: SETTLEABLE_ORDER_STATUSES },
+            OR: [
+              { paidAt: { gte: start, lt: end } },
+              { paidAt: null, completedAt: { gte: start, lt: end } },
+            ],
+          },
+        },
+        select: { id: true, amount: true },
+      });
+      if (payments.length === 0) {
+        throw new BadRequestException('No payments of this kind in those dates are waiting for settlement.');
+      }
+      const expected = payments.reduce((sum, p) => sum.plus(p.amount), new Prisma.Decimal(0));
+
+      const batch = await tx.settlementBatch.create({
+        data: {
+          tenantId,
+          branchId: dto.branchId,
+          method: dto.method,
+          referenceNumber: dto.referenceNumber,
+          periodStart: start,
+          periodEnd: new Date(end.getTime() - 1),
+          notes: dto.notes,
+          expectedAmount: expected,
+          status: 'PENDING',
+        },
+      });
+      await tx.settlementItem.createMany({
+        data: payments.map((p) => ({ settlementBatchId: batch.id, orderPaymentId: p.id, amount: p.amount })),
+      });
+      return batch;
     });
   }
 

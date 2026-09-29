@@ -27,4 +27,8 @@ for f in "$@"; do upload "$f" "/tmp/$(basename "$f")"; done
 upload "$script" "/tmp/$(basename "$script")"
 args=""
 for f in "$@"; do args="$args /tmp/$(basename "$f")"; done
-railway ssh --service "$SERVICE" -- "NODE_PATH=/app/node_modules:/app/apps/api/node_modules node /tmp/$(basename "$script")$args" 2>&1 | grep -v "take precedence"
+# SHOP and SINCE travel to the read-only probes when set here.
+envs=""
+[ -n "${SHOP:-}" ] && envs="$envs SHOP=$SHOP"
+[ -n "${SINCE:-}" ] && envs="$envs SINCE=$SINCE"
+railway ssh --service "$SERVICE" -- "$envs NODE_PATH=/app/node_modules:/app/apps/api/node_modules node /tmp/$(basename "$script")$args" 2>&1 | grep -v "take precedence"

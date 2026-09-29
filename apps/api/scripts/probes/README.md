@@ -16,13 +16,21 @@ bash apps/api/scripts/probes/run-in-container.sh apps/api/scripts/probes/receipt
      apps/api/scripts/fixtures/receipts/till_receipt.jpg
 ```
 
-## The three probes
+## The probes
 
 | Script | What it answers |
 |---|---|
 | `ai-usage.js` | The last 40 AI calls as the app logged them: model, tokens, cost, duration, and the error text of any failure. First thing to run when "AI is not working". |
 | `ai-models.js` | Which Gemini ids this Google project can actually serve, per location (`us-central1` and `global`), plus a structured-output check. Run it when Google retires a model or a new one appears. |
 | `receipt-read.js` | Reads one or more receipt images with the **deployed** prompt, schema, provider, parser, matcher and pack derivation (the compiled modules under `/app/apps/api/dist`), and prints what the screen would get. Pass image paths; a `.png` is sent as PNG, anything else as JPEG; a filename containing `shopee` or `order` is read as an order screen, `delivery` or `dr` as a delivery receipt. |
+| `copy-setup-dry-run.js` | "Copy setup" on the live data inside a transaction that is rolled back. Nothing is kept. |
+| `routing.js` | A shop's stations and where each category's items go when paid. |
+| `recipes-coverage.js` | Which products take ingredients off the shelf when sold, and which have no recipe. |
+| `shop-state.js` | Before a session of test sales: people and roles, PINs set or not, open shifts, what is on the shelf, which recipe products can be made now. |
+| `books-check.js` | After a busy stretch: accounting events by status (any PENDING or FAILED), unbalanced entries, the all-time trial balance, today's totals on the cash, sales and cost accounts, orders by payment, stock below zero, shifts. `SINCE=<ISO time>` to change the window. |
+| `db-latency.js` | One database round trip from the API container (min / median / max), and Postgres's slowest statements when `pg_stat_statements` is on. The first thing to run when sales feel slow. |
+
+The read-only ones take `SHOP=<company code>` (default `cafe-carolina`).
 
 ## How the transport works (and its limits)
 

@@ -14,6 +14,9 @@ HNScorpPH landing page lives in the separate `hns-corp-ph` repo, not here.
    so a cloud session has it too.
 2. `DEPLOY.md` — the deploy runbook. `tasks/carolina-go-live.md` — the Day-1
    runbook for the first shop.
+3. `tasks/next-session.md` — where the work stands and what waits on KJ.
+   In a cloud session, first run `bash scripts/cloud-session-setup.sh`
+   (`docs/OPERATIONS.md` section 7).
 
 On KJ's desktop only, the session's memory files add history and reasoning:
 `C:\Users\user\.claude\projects\E--AI-Projects\memory\` (`project_clerque.md`,

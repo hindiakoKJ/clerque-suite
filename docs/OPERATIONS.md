@@ -151,6 +151,46 @@ the container with `apps/api/scripts/probes/run-in-container.sh`; see
 **The database:** only ever from inside the container, read-only, through
 `@prisma/client` (`ai-usage.js` is the pattern). Never a direct connection.
 
+### Cloud sessions (claude.ai/code, the desktop app's Cloud, the phone)
+
+A cloud session is a fresh Linux VM with a clone of this repository: no
+desktop memory files, no `node_modules`, no Railway CLI. Node 22, npm, git,
+gh and Rust are preinstalled.
+
+**The environment, set once by KJ** (claude.ai/code → the cloud icon above
+the message box → hover the environment → gear):
+
+- **Network access: Custom**, with "Also include default list of common
+  package managers" ticked, and these allowed domains (Railway and
+  clerque.cc are not in the default Trusted list):
+  `backboard.railway.com`, `*.railway.com`, `clerque.cc`, `*.clerque.cc`.
+- **Environment variables:** `RAILWAY_TOKEN=<project token>` from Railway →
+  project Clerque → Settings → Tokens (environment: production). Anyone
+  using the environment can read its variables; this one is KJ's own.
+
+**First command in every new cloud session:**
+`bash scripts/cloud-session-setup.sh`. It installs the packages, builds the
+shared types and generates the Prisma client (the same steps as CI), then
+builds Railway CLI 4.42.1 from crates.io in the background into
+`~/.cargo/bin/railway` (5–10 minutes; log `/tmp/railway-install.log`). A
+SessionStart hook could run it automatically; adding one to
+`.claude/settings.json` waits for KJ's OK.
+
+**Why Railway CLI 4.42.1, built from crates.io:** from 5.x, `railway ssh`
+is native SSH to `ssh.railway.com:22` and refuses project tokens; 4.42.1
+runs over `wss://backboard.railway.com/relay` and accepts `RAILWAY_TOKEN`.
+The npm package downloads its binary from railwayapp/cli's GitHub
+releases, and a cloud session may only download release assets from
+repositories attached to it (403). If the crates.io build fails (it needs
+Rust 1.85 or newer), tell KJ: the fallback is a copy of the binary as a
+release asset on this repository, which needs his OK because the
+repository is public.
+
+**Pushing from the cloud:** a session pushes only to the branch it works
+on, so its changes reach GitHub as a branch and a pull request. KJ merges
+the pull request (the GitHub phone app works); that merge is the "push to
+master" that deploys. A migration still waits for his word before merging.
+
 ## 8. AI (the receipt reader, the till's paid-out scan, the Ledger helpers)
 
 - Provider **Gemini on Vertex AI**, paid by KJ's $2,000 Google for Startups

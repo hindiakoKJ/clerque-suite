@@ -8,6 +8,8 @@
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 SERVICE="${RAILWAY_SERVICE:-clerque-suite}"
+# A cloud session builds the CLI into ~/.cargo/bin (scripts/cloud-session-setup.sh).
+railway() { if type -P railway >/dev/null; then command railway "$@"; else "$HOME/.cargo/bin/railway" "$@"; fi; }
 
 upload() {
   local local_file="$1" remote="$2" b64 total chunk off first part op

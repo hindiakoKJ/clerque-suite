@@ -264,8 +264,8 @@ keeps outside the repo.
   (`asia-southeast1`), Postgres in the Netherlands (`europe-west4`): 165 ms
   per round trip (`probes/db-latency.js`). A sale takes 8–12 s, a stock
   receive 2–14 s, a kitchen bump 2.5 s. One till and two tills at once passed
-  every sale (60/60 on 29 Sept); eight at once lost 8 of 16 to PRISMA_P2028
-  (transaction timeout). Fix: move Postgres to `asia-southeast1` in Railway,
+  every sale (60/60 on 29 Sept, plus 76/76 one at a time); eight at once
+  lost 16 of 32 to PRISMA_P2028 (transaction timeout). Fix: move Postgres to `asia-southeast1` in Railway,
   **after** a backup exists (the nightly backup has never succeeded: the two
   secrets in `hindiakoKJ/clerque-backups` are not set).
 - Stress test on cafe-carolina, 29 Sept: about 400 transactions (sales of
@@ -274,10 +274,9 @@ keeps outside the repo.
   shift close with a shortage, Z-read, GCash and Maya settlement). All
   accounting events posted, 409 entries balanced, trial balance to the
   centavo, no stock below zero (`probes/books-check.js`).
-- KJ to decide: card money. Card sales debit 1031 like the wallets, but
-  Settlement does not take CARD, and a bank credit short by the card fee
-  comes out DISPUTED and is not booked. Recommendation: allow CARD, and book
-  a shortfall as bank charges when the owner marks it as the fee.
+- Card: decided 29 Sept, no settlement or fee work. KJ: most MSMEs take only
+  cash, GCash, Maya, MariBank and QR Ph. Card sales debit 1031 and
+  Settlement does not take CARD; that stays as it is.
 
 - Merged 29 September: PR #32 (receipt memory + verdict, table `receipt_aliases`) and
   PR #33 (session security, column `user_sessions.refreshTokenSha`).

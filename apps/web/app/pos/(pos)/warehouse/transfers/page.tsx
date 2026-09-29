@@ -82,7 +82,7 @@ export default function StockTransfersPage() {
         </button>
       </header>
 
-      <section className="rounded-xl border border-border bg-card overflow-hidden">
+      <section className="rounded-xl border border-border bg-card overflow-x-auto">
         {isLoading ? (
           <div className="p-6 text-sm text-muted-foreground text-center">Loading…</div>
         ) : transfers.length === 0 ? (

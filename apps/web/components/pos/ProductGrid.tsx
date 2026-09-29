@@ -5,6 +5,8 @@ import { cn, formatPeso } from '@/lib/utils';
 import { resolveAssetUrl } from '@/lib/api';
 import { useCartStore, type CartProduct } from '@/store/pos/cart';
 import { ModifierPickerModal } from '@/components/pos/ModifierPickerModal';
+import { cartCeiling, ceilingMessage, unitsInCart } from '@/lib/pos/stock-ceiling';
+import { toast } from 'sonner';
 import type { CartItemModifier } from '@repo/shared-types';
 
 interface Category {
@@ -18,6 +20,12 @@ interface ModifierOption {
   priceAdjustment: number | string;
   isDefault: boolean;
   isActive: boolean;
+  /** How many more of this add-on the shelf can make; null when it takes no ingredient. */
+  maxProducible?: number | null;
+  /** The add-on's ingredient has run out: the picker greys it out. */
+  isOutOfStock?: boolean;
+  /** The ingredient that ran out. */
+  limitedBy?: { name: string } | null;
 }
 
 interface ModifierGroup {
@@ -61,6 +69,9 @@ interface Product {
   } | null;
   isLowStock?: boolean;
   isOutOfStock?: boolean;
+  /** The server will not refuse a sale past maxProducible (owner opted in, or
+   *  recipe deduction is paused), so the till must not stop at it either. */
+  canOversell?: boolean;
   imageUrl?: string | null;
   modifierGroups?: ProductModifierGroup[];
   /** Pharmacy: needs Rx attached at the till before sale. */
@@ -101,6 +112,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   // renders instead.
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
   const addItem = useCartStore((s) => s.addItem);
+  const lines   = useCartStore((s) => s.lines);
 
   // Quantity multiplier: leading "3x ", "3* ", or "3 " is parsed off the search
   // term so the cashier can ring up "3x latte" → next tap adds 3 of that line.
@@ -121,7 +133,30 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
     return matchCat && (matchName || matchSku || matchBarcode);
   });
 
+  function toCartProduct(p: Product): CartProduct {
+    return {
+      id: p.id,
+      name: p.name,
+      price: Number(p.price),
+      costPrice: p.costPrice != null ? Number(p.costPrice) : undefined,
+      isVatable: p.isVatable,
+      categoryId: p.categoryId ?? undefined,
+      isRxRequired:     p.isRxRequired,
+      isControlledDrug: p.isControlledDrug,
+      drugClass:        p.drugClass,
+      // The ceiling travels with the line so the cart's "+" stops at it too.
+      maxProducible:    p.maxProducible,
+      limitedByName:    p.limitedBy?.name,
+      canOversell:      p.canOversell,
+    };
+  }
+
   function handleAdd(p: Product) {
+    // Stop here, before the picker opens, when the cart already holds all of
+    // this that can be made. The store repeats the check on every add.
+    const refusal = ceilingMessage(toCartProduct(p), unitsInCart(lines, p.id) + 1);
+    if (refusal) { toast.error(refusal); return; }
+
     // Sprint 19 — Pharmacy: Rx-required products are added to cart freely;
     // PIN-attest happens later from the cart panel right before Charge. The
     // old "Has the customer presented Rx?" confirmation that lived here was
@@ -142,10 +177,12 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
     // optional with no default to fall back on. An optional group that
     // already has a default (e.g. Milk = Fresh) resolves silently, and the
     // cashier taps "Customise" on the line when someone actually wants oat.
+    // A default whose own ingredient has run out is no default: the picker
+    // opens so the cashier picks something the bar can make.
     const mustAsk = activeGroups.some(
       (g) =>
         g.modifierGroup.required ||
-        !g.modifierGroup.options.some((o) => o.isActive && o.isDefault),
+        !g.modifierGroup.options.some((o) => o.isActive && o.isDefault && !o.isOutOfStock),
     );
 
     if (mustAsk) {
@@ -168,7 +205,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
     // composition — the recipe and the receipt depend on it.
     const defaults: CartItemModifier[] = activeGroups.flatMap((g) =>
       g.modifierGroup.options
-        .filter((o) => o.isActive && o.isDefault)
+        .filter((o) => o.isActive && o.isDefault && !o.isOutOfStock)
         .map((o) => ({
           modifierGroupId:  g.modifierGroup.id,
           modifierOptionId: o.id,
@@ -181,19 +218,10 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
   }
 
   function commitAdd(p: Product, modifiers: CartItemModifier[], qty = 1) {
-    const product: CartProduct = {
-      id: p.id,
-      name: p.name,
-      price: Number(p.price),
-      costPrice: p.costPrice != null ? Number(p.costPrice) : undefined,
-      isVatable: p.isVatable,
-      categoryId: p.categoryId ?? undefined,
-      isRxRequired:     p.isRxRequired,
-      isControlledDrug: p.isControlledDrug,
-      drugClass:        p.drugClass,
-    };
+    const product = toCartProduct(p);
     for (let i = 0; i < qty; i++) {
-      addItem(product, undefined, modifiers);
+      // "3x latte" with milk for two adds two; the store says why it stopped.
+      if (!addItem(product, undefined, modifiers)) break;
     }
     setPickerProduct(null);
     // Clear search after a successful add so the multiplier resets and the
@@ -281,15 +309,22 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                     : null;
               const isLow = p.isLowStock ?? false;
               const isOut = p.isOutOfStock ?? stock === 0;
+              // The cart already holds every one of this that can be made:
+              // the tile goes quiet rather than letting a tap be refused.
+              const ceiling   = cartCeiling(toCartProduct(p));
+              const inCart    = unitsInCart(lines, p.id);
+              const allInCart = !isOut && ceiling !== null && inCart >= ceiling;
               return (
                 <button
                   key={p.id}
                   onClick={() => handleAdd(p)}
-                  disabled={isOut}
+                  disabled={isOut || allInCart}
                   className={cn(
                     'group relative flex flex-col items-start p-3 rounded-xl border bg-card hover:shadow-md hover:-translate-y-0.5 active:scale-[0.98] transition-all text-left min-w-0 min-h-[200px] sm:min-h-[220px] [@media(max-height:700px)]:min-h-0 shadow-sm',
                     isOut
                       ? 'bg-muted border-border opacity-60 cursor-not-allowed'
+                      : allInCart
+                      ? 'border-amber-400 dark:border-amber-500 opacity-70 cursor-not-allowed'
                       : isLow
                       ? 'border-amber-400 dark:border-amber-500 hover:border-amber-500 dark:hover:border-amber-400 hover:ring-2 hover:ring-amber-400/30'
                       : 'border-border hover:border-[var(--accent)] hover:ring-2 hover:ring-[var(--accent)]/20',
@@ -360,7 +395,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                       'absolute top-2 right-2 text-[10px] sm:text-xs px-1.5 py-0.5 rounded-full font-semibold',
                       isOut
                         ? 'bg-muted text-muted-foreground'
-                        : isLow
+                        : isLow || allInCart
                         ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                         : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
                     )}
@@ -374,7 +409,7 @@ export function ProductGrid({ products, categories, loading }: ProductGridProps)
                             : '')
                         : undefined
                     }>
-                      {isOut ? 'OUT' : isLow ? `LOW · ${stock}` : `${stock} left`}
+                      {isOut ? 'OUT' : allInCart ? `all ${inCart} in cart` : isLow ? `LOW · ${stock}` : `${stock} left`}
                     </span>
                   )}
                   {/* Named on the tile itself when it is actually urgent —

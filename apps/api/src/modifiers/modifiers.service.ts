@@ -264,6 +264,24 @@ export class ModifiersService {
 
   async deleteOption(tenantId: string, groupId: string, optionId: string) {
     await this.findOption(tenantId, groupId, optionId);
+    // An option that has ever been sold is on order_item_modifiers rows — the
+    // receipts. That relation has no onDelete, so the database refused the
+    // hard delete (P2003) and the owner saw only "Failed to delete option".
+    // Hide such an option instead, the way deleteGroup hides a group that
+    // products still use: every read path already filters options on
+    // isActive, so it leaves the till and the modal either way, and the past
+    // receipts keep their line.
+    const sold = await this.prisma.orderItemModifier.count({
+      where: { modifierOptionId: optionId },
+    });
+    if (sold > 0) {
+      const soft = await this.prisma.modifierOption.updateMany({
+        where: { id: optionId, modifierGroupId: groupId, group: { tenantId } },
+        data:  { isActive: false },
+      });
+      if (soft.count === 0) throw new NotFoundException('Modifier option not found');
+      return { id: optionId, isActive: false };
+    }
     const result = await this.prisma.modifierOption.deleteMany({
       where: { id: optionId, modifierGroupId: groupId, group: { tenantId } },
     });

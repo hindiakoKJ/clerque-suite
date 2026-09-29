@@ -256,6 +256,10 @@ export default function BillingPage() {
           <ExternalLink className="h-3 w-3" />
           To record customer payments, mark them paid on HNS Corp PH&rsquo;s tenant → Ledger → AR (the actual books).
         </p>
+        <p className="text-xs text-muted-foreground">
+          Customer payment proofs waiting for confirmation and a BIR Official Receipt are under{' '}
+          <Link href="/admin/payments-pending" className="underline hover:text-foreground">Payments</Link>.
+        </p>
       </div>
     </div>
   );

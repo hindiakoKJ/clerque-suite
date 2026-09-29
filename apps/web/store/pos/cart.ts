@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { computeVat, computeDiscount, round2 } from '@/lib/pos/utils';
 import { getLinePromoDiscount } from '@/lib/pos/promotions';
 import { discountRemovedMessage, oneUnitSubtotal, unclaimedVatableSubtotal } from '@/lib/pos/cart-discounts';
+import { ceilingMessage, unitsInCart } from '@/lib/pos/stock-ceiling';
 import type { CartItemModifier, TaxStatus } from '@repo/shared-types';
 import type { ActivePromotion } from '@/lib/pos/promotions';
 
@@ -32,6 +33,18 @@ export interface CartProduct {
     | 'VACCINE' | 'DEVICE' | 'SUPPLEMENT' | 'COSMETIC' | 'OTHER';
   /** Retail · RA 9211 — tobacco/alcohol require age verification at handoff. */
   isAgeRestricted?: boolean;
+  /**
+   * How many the shop can make right now, from the catalog tile when the line
+   * was added: finished goods on hand, or the fewest servings any ingredient
+   * allows. The tile and the "+" button stop at it. Absent when the catalog
+   * did not say.
+   */
+  maxProducible?: number | null;
+  /** The ingredient that set that ceiling, for the message. */
+  limitedByName?: string;
+  /** The owner sells past the count (Settings) or recipe deduction is paused:
+   *  the server will not refuse, so the till does not either. */
+  canOversell?: boolean;
 }
 
 export interface CartLine {
@@ -141,7 +154,11 @@ interface CartState {
   /** Called once on auth store hydration to push tenant flags into the cart store. */
   setTenantFlags: (taxStatus: TaxStatus) => void;
 
-  addItem: (product: CartProduct, variantId?: string, modifiers?: CartItemModifier[]) => void;
+  /**
+   * Returns false, after telling the cashier why, when the cart already holds
+   * all of that product that can be made.
+   */
+  addItem: (product: CartProduct, variantId?: string, modifiers?: CartItemModifier[]) => boolean;
   removeItem: (lineKey: string) => void;
   updateQty: (lineKey: string, qty: number) => void;
   setItemDiscount: (lineKey: string, discount: number) => void;
@@ -241,6 +258,10 @@ export const useCartStore = create<CartState>()(
   setTenantFlags: (taxStatus) => set({ taxStatus, isVatRegistered: taxStatus === 'VAT' }),
 
   addItem: (product, variantId, modifiers) => {
+    // Stop at what can be made, so the cashier hears it here and not at Charge.
+    const refusal = ceilingMessage(product, unitsInCart(get().lines, product.id) + 1);
+    if (refusal) { toast.error(refusal); return false; }
+
     const sortedOptionIds = (modifiers ?? []).map((m) => m.modifierOptionId).sort().join(',');
     const lineKey = [product.id, variantId ?? '', sortedOptionIds].join('|');
     const priceAdjustment = (modifiers ?? []).reduce((sum, m) => sum + m.priceAdjustment, 0);
@@ -263,6 +284,7 @@ export const useCartStore = create<CartState>()(
       };
     });
     if (removed.message) toast.warning(removed.message);
+    return true;
   },
 
   removeItem: (lineKey) => {
@@ -309,6 +331,12 @@ export const useCartStore = create<CartState>()(
     const state = get();
     const line = state.lines.find((l) => l.lineKey === lineKey);
     if (!line || line.quantity === qty) return;
+    // Going up is checked against what can be made; going down always works.
+    if (qty > line.quantity) {
+      const onOtherLines = unitsInCart(state.lines, line.product.id) - line.quantity;
+      const refusal = ceilingMessage(line.product, onOtherLines + qty);
+      if (refusal) { toast.error(refusal); return; }
+    }
     const removed = discountsOff(state);
     set({
       lines: state.lines.map((l) => l.lineKey === lineKey ? { ...l, quantity: qty } : l),

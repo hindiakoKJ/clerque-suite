@@ -1,10 +1,12 @@
 'use client';
 import { useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, X, Pencil, Users, ChevronRight, Search, Upload, Stamp } from 'lucide-react';
 import { StampCardsModal } from '@/components/loyalty/StampCardsModal';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
+import { canEnterApp } from '@/lib/app-roles';
 import { formatPeso } from '@/lib/utils';
 import { toast } from 'sonner';
 import { ImportModal } from '@/components/ui/ImportModal';
@@ -100,14 +102,25 @@ function CustomerModal({
       : EMPTY_FORM,
   );
   const [saving, setSaving] = useState(false);
+  const { user } = useAuthStore();
+  // An accountant or bookkeeper cannot open the POS: a plain link to
+  // /pos/price-lists threw them out to the app picker mid-form.
+  const canOpenPos = !!user && canEnterApp('pos', user.role);
 
   // Price lists for the dropdown — F&B tenants will have these; other
   // verticals get an empty list and the dropdown just shows "Default pricing".
-  const { data: priceLists = [] } = useQuery<PriceListLite[]>({
+  const { data: priceLists = [], isError: priceListsFailed } = useQuery<PriceListLite[]>({
     queryKey: ['price-lists', 'lite'],
     queryFn: () => api.get('/price-lists').then((r) => r.data.map((l: { id: string; name: string }) => ({ id: l.id, name: l.name }))),
     staleTime: 60_000,
   });
+  // The customer's own list, when the fetched list does not carry it (load
+  // failed, or the list was deactivated): keep showing the real assignment
+  // instead of "Default pricing".
+  const assignedNotListed: PriceListLite | null =
+    editing?.priceListId && !priceLists.some((pl) => pl.id === editing.priceListId)
+      ? { id: editing.priceListId, name: editing.priceList?.name ?? 'Assigned price list' }
+      : null;
 
   function set(field: keyof CustomerFormData, val: string) {
     setForm((prev) => ({ ...prev, [field]: val }));
@@ -266,13 +279,31 @@ function CustomerModal({
                 className={INPUT_CLS}
               >
                 <option value="">Default pricing (uses Product price)</option>
+                {assignedNotListed && (
+                  <option value={assignedNotListed.id}>{assignedNotListed.name}</option>
+                )}
                 {priceLists.map((pl) => (
                   <option key={pl.id} value={pl.id}>{pl.name}</option>
                 ))}
               </select>
+              {priceListsFailed && (
+                <p className="text-[11px] text-red-600 mt-1">
+                  Could not load the price lists. The customer&apos;s current list is kept as is.
+                </p>
+              )}
               <p className="text-[11px] text-muted-foreground/70 mt-1">
                 When assigned, Counter rings this customer&apos;s orders at the price-list rates instead of the default.
-                Manage lists at <a href="/pos/price-lists" className="text-[var(--accent)] underline">Price lists</a>.
+                {canOpenPos ? (
+                  <>
+                    {' '}Manage lists at{' '}
+                    <Link href="/pos/price-lists" target="_blank" rel="noopener noreferrer" className="text-[var(--accent)] underline">
+                      Price lists
+                    </Link>{' '}
+                    (opens in a new tab).
+                  </>
+                ) : (
+                  <> Price lists are managed in Counter by the owner or branch manager.</>
+                )}
               </p>
             </div>
 

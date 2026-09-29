@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, Optional, Logger } from '@nestjs/common';
 import { Prisma, PurchaseRequestStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { learnedLevels } from '../inventory/learned-levels';
 import { InventoryService, MarginAlert } from '../inventory/inventory.service';
 import { SimpleEntriesService } from '../simple-entries/simple-entries.service';
 import { ExpenseCategory } from '../simple-entries/dto/simple-entry.dto';
@@ -578,6 +579,8 @@ export class ProcureService {
     }> = [];
 
     let added = 0;
+    // Out, with no level, no pace and no last purchase to size a request by: named, so the screen can say "add these".
+    const unpaced: string[] = [];
     for (const row of ingredients) {
       const rawMaterialId = String(row['rawMaterialId'] ?? row['id'] ?? '');
       if (!rawMaterialId) continue;
@@ -621,7 +624,19 @@ export class ProcureService {
         rule as the doubling: get above the line and leave some cover.
       */
       const level = Number(row['lowStockAlert'] ?? 0);
-      const wanted = shortBy > 0 ? shortBy * 2 : (level > 0 ? level : 1);
+      let wanted = shortBy > 0 ? shortBy * 2 : (level > 0 ? level : 1);
+      /*
+        Out, needed by a recipe, and no level and no sales yet to learn one
+        from -- a shop in its first days. "Double the shortfall" has nothing to
+        double, and one gram of milk is not a request. Ask for what was bought
+        last time, one pack; with no purchase on record either, leave it off
+        and let the person add it, rather than write a number that means nothing.
+      */
+      if (row['levelSource'] === 'none') {
+        const pack = (await this.lastPacks(tenantId, [rawMaterialId])).get(rawMaterialId);
+        if (!pack || !(Number(pack.packSize) > 0)) { unpaced.push(String(row['name'] ?? '')); continue; }
+        wanted = Number(pack.packSize);
+      }
       /*
         What is on the way counts as stock the shop will have.
 
@@ -673,17 +688,21 @@ export class ProcureService {
       watching any of these".
 
       A shop can pass a whole kitchen through the app or the onboarding
-      workbook without filling this column once — it is optional in both — and
-      then wonder why Check stock keeps coming back empty while the rice runs
-      out. Counting them is the fix; inventing a default reorder level is not,
-      because a threshold nobody chose is a number nobody can trust.
+      workbook without filling this column once — it is optional in both.
+      Since 29 September such an ingredient is judged against a level learned
+      from the shop's own last two weeks of use (inventory/learned-levels.ts),
+      so only what has no typed level AND no use to learn from is unwatched.
+      The typed level stays the rule: shops are asked to fill every one in.
     */
-    const unmonitored = await this.prisma.rawMaterial.count({
-      where: { tenantId, isActive: true, lowStockAlert: null },
+    const noTypedLevel = await this.prisma.rawMaterial.findMany({
+      where:  { tenantId, isActive: true, lowStockAlert: null, subRecipeItems: { none: {} } },
+      select: { id: true },
     });
+    const learned = noTypedLevel.length > 0 ? await learnedLevels(this.prisma, tenantId, branchId) : new Map<string, number>();
+    const unmonitored = noTypedLevel.filter((r) => !learned.has(r.id)).length;
 
     return {
-      requestId: req.id, requestNumber: req.requestNumber, added, unmonitored,
+      requestId: req.id, requestNumber: req.requestNumber, added, unmonitored, unpaced,
       /*
         Prepared items that are low, reported separately so the screen can send
         someone to make them instead of to the market. Silence about these

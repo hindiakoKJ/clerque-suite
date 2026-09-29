@@ -5,17 +5,18 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   Plus, Send, ShoppingCart, PackageCheck, Loader2, Trash2, Sparkles, Check, AlertTriangle, Paperclip,
-  Camera, Copy, Truck, Sparkle, FileText, Share2, Store,
+  Camera, Copy, Truck, Sparkle, FileText, Share2, Store, ChevronDown,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { formatPeso } from '@/lib/utils';
+import { formatPeso, formatDate } from '@/lib/utils';
 import { isSanityCancel, enterMovesNext } from '@/lib/sanity';
 import { CostHint, useCostBands } from '@/components/shared/CostHint';
 import { lowStockToast, type PullLowStockResult } from './low-stock-toast';
 import {
   chipsInOrder, isStillOpen, listToOpen, recordsOn, showsRecordBoxes, startsTicked, startsTickedAsWalkIn,
   fillInWords, stillNeeds, lastPricedLines, priceCheck, firstWithoutPrice, viewWanted,
+  pastLists, pastListDay, pastListMatches,
 } from './buy-list-view';
 import { pickerOrder, showNotInRecipe } from './ingredient-picker';
 import {
@@ -100,6 +101,8 @@ interface Request {
   branch?: { id: string; name: string } | null;
   sentAt?: string | null;
   boughtAt?: string | null;
+  receivedAt?: string | null;
+  createdAt?: string | null;
   notes?: string | null;
   /**
    * Set by the server when this viewer may not see what the delivery cost.
@@ -133,6 +136,8 @@ const readTag = (notes: string | null | undefined, name: string): string | null 
 };
 const plainNotes = (notes: string | null | undefined) => (notes ?? '').replace(TAG, '').replace(/\s{2,}/g, ' ').trim();
 const onTheWay = (r: Request) => readTag(r.notes, 'ONTHEWAY');
+/** The day a finished list is shown under, e.g. "17 Sept 2026". */
+const dayText = (r: Request) => { const d = pastListDay(r); return d ? formatDate(d) : '—'; };
 
 const manilaToday = () =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -379,6 +384,26 @@ export default function ProcurePage() {
   // Staff open on the list being built: adding and a walk-in buy both happen there.
   const byNeed = listToOpen(live, !canDecide, (r) => !!onTheWay(r));
 
+  /*
+    "Past lists". The chips stop at eight and the finished ones only fill what
+    the open ones leave, so an owner could not get back to a list older than
+    the newest few except through a link from the books or a receipt. Fetched
+    by status, only once the person opens it: the list above is the newest
+    hundred of everything, and a busy shop's finished lists fall off it in
+    three months; by status each side gets its own hundred.
+  */
+  const [showPast, setShowPast] = useState(false);
+  const [pastSearch, setPastSearch] = useState('');
+  const { data: pastData, isLoading: pastLoading } = useQuery<{ rows: Request[]; capped: boolean }>({
+    queryKey: ['procure-requests', branchId, 'past'],
+    queryFn:  () => Promise.all((['RECEIVED', 'CANCELLED'] as const).map((status) =>
+      api.get('/procure/requests', { params: { branchId, status } }).then((r) => r.data as Request[]),
+    )).then((lists) => ({ rows: lists.flat(), capped: lists.some((l) => l.length >= 100) })),
+    enabled:  !!user && showPast,
+  });
+  const pastFetched = pastData?.rows ?? [];
+  const past = pastLists(all, pastFetched);
+
   // Nothing outstanding at all -- open one so the branch always has somewhere
   // to put the next shortage. Runs only when the list came back empty-handed.
   const { data: opened, isLoading: openLoading } = useQuery<Request>({
@@ -387,7 +412,8 @@ export default function ProcurePage() {
     enabled:  !!user && !listLoading && !isError && byNeed === null,
   });
 
-  const req = (viewing ? all.find((r) => r.id === viewing) : null) ?? byNeed ?? opened;
+  // A past list opened from the expander may be older than the newest hundred above.
+  const req = (viewing ? (all.find((r) => r.id === viewing) ?? pastFetched.find((r) => r.id === viewing)) : null) ?? byNeed ?? opened;
   /*
     A purchase recorded from the Excel sheet was bought on the day the sheet
     says, often days ago: posting it defaults to that day, so the stock lot and
@@ -1190,6 +1216,75 @@ export default function ProcurePage() {
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/*
+        Every finished list, to open and read again: what was bought, what it
+        cost, the photo of the paper. The chips above only ever reach the last
+        few of them.
+      */}
+      {(past.length > 0 || showPast) && (
+        <div className={showPast ? 'rounded-xl border border-border bg-card' : ''}>
+          <button
+            type="button"
+            onClick={() => setShowPast((v) => !v)}
+            aria-expanded={showPast}
+            className={`inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground ${showPast ? 'w-full px-4 py-2.5' : 'px-1 py-1'}`}
+          >
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showPast ? 'rotate-180' : ''}`} />
+            Past lists
+          </button>
+          {showPast && (() => {
+            const shown = past.filter((r) => pastListMatches(r, dayText(r), pastSearch));
+            return (
+              <div className="space-y-2 border-t border-border px-4 py-3">
+                <input
+                  type="search"
+                  value={pastSearch}
+                  onChange={(e) => setPastSearch(e.target.value)}
+                  placeholder="Find by number, day or item"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                />
+                {pastLoading && pastFetched.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Loading…</p>
+                ) : shown.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    {pastSearch.trim() ? 'No past list matches that.' : 'No finished lists yet.'}
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-border">
+                    {shown.map((r) => {
+                      const spent = r.lines.reduce((s, l) => s + num(l.packsBought) * num(l.packCost), 0);
+                      return (
+                        <li key={r.id}>
+                          <button
+                            type="button"
+                            onClick={() => { setViewing(r.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                            className={`flex w-full items-center justify-between gap-3 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted ${r.id === req.id ? 'bg-[var(--accent)]/10' : ''}`}
+                          >
+                            <span className="min-w-0">
+                              <span className="block font-mono text-xs">{r.requestNumber}</span>
+                              <span className="block text-[11px] text-muted-foreground">
+                                {dayText(r)}{' · '}{r.status === 'CANCELLED' ? 'Cancelled' : 'In stock'}
+                                {' · '}{r.lines.length} item{r.lines.length === 1 ? '' : 's'}
+                              </span>
+                            </span>
+                            {r.status === 'RECEIVED' && !r.costsHidden && (
+                              <span className="shrink-0 text-xs font-medium">{peso(spent)}</span>
+                            )}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {pastData?.capped && (
+                  <p className="text-[11px] text-muted-foreground">Only the last 100 in-stock and the last 100 cancelled lists are shown here.</p>
+                )}
+              </div>
+            );
+          })()}
         </div>
       )}
 

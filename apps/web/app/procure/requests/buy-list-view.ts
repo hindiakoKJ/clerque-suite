@@ -20,6 +20,43 @@ export function chipsInOrder<T extends { status: string }>(all: T[], max = 8): T
   return [...open, ...done].slice(0, max);
 }
 
+// ── past lists ───────────────────────────────────────────────────────────────
+
+/**
+ * The finished lists a person can browse under "Past lists": in stock or
+ * cancelled, one row per list, newest first. The chips above stop at eight
+ * and the finished ones only fill what the open ones leave, so this is the
+ * way to everything behind them. Takes what the screen already holds and
+ * what it fetched by status, so a list is never listed twice.
+ */
+export function pastLists<T extends { id: string; status: string; createdAt?: string | null }>(
+  ...sources: ReadonlyArray<readonly T[]>
+): T[] {
+  const byId = new Map<string, T>();
+  for (const list of sources) {
+    for (const r of list) if (!isStillOpen(r.status) && !byId.has(r.id)) byId.set(r.id, r);
+  }
+  return [...byId.values()].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+}
+
+/** The day a finished list is remembered by: when it went into stock, else when it was bought, sent or started. */
+export const pastListDay = (r: {
+  receivedAt?: string | null; boughtAt?: string | null; sentAt?: string | null; createdAt?: string | null;
+}): string | null => r.receivedAt ?? r.boughtAt ?? r.sentAt ?? r.createdAt ?? null;
+
+/** Whether a past list is one the person typed for: its number, its day as shown, or an item on it. */
+export function pastListMatches(
+  r: { requestNumber: string; lines: ReadonlyArray<{ rawMaterial: { name: string } }> },
+  dayText: string,
+  typed: string,
+): boolean {
+  const needle = typed.trim().toLowerCase();
+  if (!needle) return true;
+  return r.requestNumber.toLowerCase().includes(needle)
+    || dayText.toLowerCase().includes(needle)
+    || r.lines.some((l) => l.rawMaterial.name.toLowerCase().includes(needle));
+}
+
 /**
  * Which still-open list the screen opens on, from `live` (newest first).
  *

@@ -2678,7 +2678,6 @@ export class ExportService {
 
     writeSec('CONTROL');
     writeKpi('Control', 'Pending Expense Claims',        metrics.control.pendingExpenseClaims);
-    writeKpi('Control', 'SOD Overrides (last 30d)',      metrics.control.sodOverridesLast30d);
     writeKpi('Control', 'Products Missing Cost',         metrics.control.productsMissingCost);
     writeKpi('Control', 'Audit Entries (24h)',           metrics.control.auditEntriesLast24h);
     writeKpi('Control', 'Offline Syncs (24h)',           metrics.control.offlineSyncsLast24h);

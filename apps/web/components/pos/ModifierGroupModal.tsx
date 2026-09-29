@@ -131,10 +131,19 @@ export function ModifierGroupModal({ productId, productName, onClose }: Props) {
   });
 
   const { mutate: deleteOption } = useMutation({
-    mutationFn: ({ groupId, optionId }: { groupId: string; optionId: string }) =>
+    mutationFn: ({ groupId, optionId }: { groupId: string; optionId: string; label: string }) =>
       api.delete(`/modifiers/groups/${groupId}/options/${optionId}`),
-    onSuccess: invalidate,
-    onError: () => toast.error('Failed to delete option'),
+    onSuccess: (_res, { label }) => {
+      invalidate();
+      toast.success(`Removed ${label}`);
+    },
+    onError: (err: unknown, { label }) => {
+      const reason = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
+      toast.error(
+        `Could not remove ${label}. ` +
+          (Array.isArray(reason) ? reason.join(' ') : reason ?? 'Check the connection and try again.'),
+      );
+    },
   });
 
   return (
@@ -253,8 +262,18 @@ export function ModifierGroupModal({ productId, productName, onClose }: Props) {
                               <span className="text-[10px] font-semibold text-[var(--accent)]">DEFAULT</span>
                             )}
                             <button
-                              onClick={() => deleteOption({ groupId: g.id, optionId: opt.id })}
+                              onClick={() => {
+                                // The group is shared: the option leaves every
+                                // product that uses it, not just this one.
+                                if (!window.confirm(
+                                  `Remove "${opt.name}" from ${g.name}?\n\n` +
+                                  `It comes off every product that uses ${g.name}, not just ${productName}.`,
+                                )) return;
+                                deleteOption({ groupId: g.id, optionId: opt.id, label: `${opt.name} from ${g.name}` });
+                              }}
                               className="text-muted-foreground hover:text-red-400 transition-colors"
+                              title={`Remove ${opt.name}`}
+                              aria-label={`Remove ${opt.name} from ${g.name}`}
                             >
                               <X className="h-3.5 w-3.5" />
                             </button>

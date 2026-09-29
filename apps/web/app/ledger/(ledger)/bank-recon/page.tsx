@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Banknote, Plus, Save, FileCheck, Upload, Trash2, Paperclip, X } from 'lucide-react';
+import { Banknote, Plus, Save, FileCheck, Upload, Trash2, Paperclip, X, FolderOpen } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 import { formatPeso } from '@/lib/utils';
@@ -43,6 +43,19 @@ interface Recon {
   completedAt?:  string | null;
   createdAt:     string;
 }
+/** GET /bank-recon/:id — the list row plus notes and the saved lines. */
+interface ReconItem {
+  itemType:        'STATEMENT' | 'JE_LINE' | 'MATCHED';
+  statementDate:   string | null;
+  statementDesc:   string | null;
+  statementAmount: string | number | null;
+  journalLineId:   string | null;
+  isMatched:       boolean;
+}
+interface ReconDetail extends Recon {
+  notes: string | null;
+  items: ReconItem[];
+}
 
 interface StatementRow {
   id:          string;
@@ -78,6 +91,12 @@ export default function BankReconPage() {
   const [stmtRows,    setStmtRows]    = useState<StatementRow[]>([]);
   const [saving,      setSaving]      = useState(false);
   const [attachTarget, setAttachTarget] = useState<Recon | null>(null);
+  // The saved reconciliation this worksheet belongs to. Null = a new one.
+  // "Save draft" used to wipe the screen and the In Progress row could not be
+  // reopened, so the next save created a second draft. The API always had
+  // GET /bank-recon/:id and an upsert keyed on `id`; the page never used them.
+  const [reconId,     setReconId]     = useState<string | null>(null);
+  const [resumingId,  setResumingId]  = useState<string | null>(null);
 
   // Past reconciliations
   const { data: history = [] } = useQuery<Recon[]>({
@@ -144,6 +163,52 @@ export default function BankReconPage() {
     e.target.value = ''; // allow re-upload of the same file
   }
 
+  // ── Resume a saved draft ───────────────────────────────────────────────
+  async function resume(r: Recon) {
+    setResumingId(r.id);
+    try {
+      const d = (await api.get<ReconDetail>(`/bank-recon/${r.id}`)).data;
+      setAccountId(d.accountId);
+      setPeriodStart(String(d.periodStart).slice(0, 10));
+      setPeriodEnd(String(d.periodEnd).slice(0, 10));
+      setBankBalance(String(d.bankBalance));
+      setNotes(d.notes ?? '');
+      // JE_LINE items are re-derived from the draft query; only the typed
+      // statement lines (and their matches) come back onto the worksheet.
+      setStmtRows(
+        d.items
+          .filter((it) => it.itemType === 'STATEMENT' || it.itemType === 'MATCHED')
+          .map((it) => {
+            stmtSeq += 1;
+            return {
+              id:          `S${stmtSeq}`,
+              date:        it.statementDate ? String(it.statementDate).slice(0, 10) : '',
+              description: it.statementDesc ?? '',
+              amount:      it.statementAmount == null ? '' : String(it.statementAmount),
+              matchedJeId: it.journalLineId ?? null,
+            };
+          }),
+      );
+      setReconId(d.id);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg ?? 'Could not open that reconciliation.');
+    } finally {
+      setResumingId(null);
+    }
+  }
+
+  function startNew() {
+    setReconId(null);
+    setAccountId('');
+    setPeriodStart(startOfMonth());
+    setPeriodEnd(todayIso());
+    setBankBalance('');
+    setNotes('');
+    setStmtRows([]);
+  }
+
   // ── Save / complete ────────────────────────────────────────────────────
   async function save(complete: boolean) {
     if (!accountId)    { toast.error('Pick a cash/bank account.'); return; }
@@ -174,7 +239,8 @@ export default function BankReconPage() {
         });
       }
 
-      await api.post('/bank-recon', {
+      const res = await api.post<{ id: string }>('/bank-recon', {
+        id:          reconId ?? undefined,
         accountId,
         periodStart, periodEnd,
         bankBalance: parseFloat(bankBalance),
@@ -184,12 +250,19 @@ export default function BankReconPage() {
         complete,
       });
 
-      toast.success(complete ? 'Reconciliation completed.' : 'Reconciliation saved.');
       qc.invalidateQueries({ queryKey: ['bank-recon-list'] });
-      // Reset form
-      setStmtRows([]);
-      setBankBalance('');
-      setNotes('');
+      if (complete) {
+        toast.success('Reconciliation completed.');
+        // Done with this one: clear the worksheet for the next period.
+        setReconId(null);
+        setStmtRows([]);
+        setBankBalance('');
+        setNotes('');
+      } else {
+        toast.success('Draft saved. Keep working, or resume it later from Past Reconciliations.');
+        // Keep the worksheet on screen; further saves update this same draft.
+        setReconId(res.data?.id ?? reconId);
+      }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
       toast.error(msg ?? 'Failed to save reconciliation.');
@@ -215,12 +288,22 @@ export default function BankReconPage() {
         </p>
       </div>
 
+      {reconId && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 flex items-center justify-between gap-3 flex-wrap">
+          <span>You are working on a saved draft. Save draft keeps it in progress; Mark Complete finishes it.</span>
+          <button type="button" onClick={startNew} className="underline hover:text-foreground">
+            Start a new reconciliation
+          </button>
+        </div>
+      )}
+
       {/* Picker */}
       <div className="rounded-lg border border-border bg-background p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
         <div>
           <label className="block text-xs font-medium text-muted-foreground mb-1">Cash / Bank Account *</label>
-          <select className="h-9 px-3 rounded-md border border-border bg-background text-sm w-full"
-            value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+          {/* A saved draft stays on its account; start a new one to reconcile another. */}
+          <select className="h-9 px-3 rounded-md border border-border bg-background text-sm w-full disabled:opacity-60"
+            value={accountId} onChange={(e) => setAccountId(e.target.value)} disabled={!!reconId}>
             <option value="">{cashAccounts.length ? '— Pick account —' : 'No bank account in the chart of accounts'}</option>
             {cashAccounts.map((a) => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
           </select>
@@ -412,7 +495,7 @@ export default function BankReconPage() {
 
       {/* History */}
       {history.length > 0 && (
-        <div className="rounded-lg border border-border bg-background overflow-hidden">
+        <div className="rounded-lg border border-border bg-background overflow-x-auto">
           <div className="px-3 py-2 border-b border-border text-sm font-semibold">Past Reconciliations</div>
           <table className="w-full text-sm">
             <thead className="text-xs text-muted-foreground bg-muted/40">
@@ -424,7 +507,7 @@ export default function BankReconPage() {
                 <th className="text-right p-2">Variance</th>
                 <th className="text-left p-2">Status</th>
                 <th className="text-left p-2">Prepared by</th>
-                <th className="text-left p-2 w-20">Files</th>
+                <th className="text-left p-2 w-40"></th>
               </tr>
             </thead>
             <tbody>
@@ -448,13 +531,25 @@ export default function BankReconPage() {
                     </td>
                     <td className="p-2 text-muted-foreground">{r.preparedBy.name}</td>
                     <td className="p-2">
-                      <button
-                        onClick={() => setAttachTarget(r)}
-                        title="Attachments"
-                        className="inline-flex items-center text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                      >
-                        <Paperclip className="w-3 h-3" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        {r.status === 'IN_PROGRESS' && (
+                          <button
+                            onClick={() => resume(r)}
+                            disabled={resumingId === r.id}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-border hover:bg-muted transition-colors disabled:opacity-50 whitespace-nowrap"
+                          >
+                            <FolderOpen className="w-3 h-3" />
+                            {resumingId === r.id ? 'Opening…' : 'Resume'}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setAttachTarget(r)}
+                          title="Attachments"
+                          className="inline-flex items-center text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                        >
+                          <Paperclip className="w-3 h-3" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

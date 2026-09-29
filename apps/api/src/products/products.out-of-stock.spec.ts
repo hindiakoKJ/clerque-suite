@@ -17,10 +17,13 @@ describe('ProductsService — sell when out of stock', () => {
   const LATTE = 'p-latte';
   const MILK = 'rm-milk';
 
-  function build(allowSaleWhenOutOfStock: boolean, milkStock: number) {
+  function build(allowSaleWhenOutOfStock: boolean, milkStock: number, deductionPaused = false) {
     const prisma: any = {
       tenant: {
-        findUnique: jest.fn().mockResolvedValue({ allowSaleWhenOutOfStock }),
+        findUnique: jest.fn().mockResolvedValue({
+          allowSaleWhenOutOfStock,
+          recipeDeductionPausedAt: deductionPaused ? new Date() : null,
+        }),
       },
       customer: { findFirst: jest.fn().mockResolvedValue(null) },
       priceListItem: { findMany: jest.fn().mockResolvedValue([]) },
@@ -79,5 +82,18 @@ describe('ProductsService — sell when out of stock', () => {
     const [b] = await blocked.findForPos(TENANT, BRANCH);
     expect(b.maxProducible).toBe(20);
     expect(b.isOutOfStock).toBe(false);
+  });
+
+  it('tells the till whether it may add more than the count', async () => {
+    // Capped: the server would refuse a 21st latte with milk for 20, so the
+    // till stops at 20 while the cart is being built.
+    const [capped] = await build(false, 3_000).findForPos(TENANT, BRANCH);
+    expect(capped.canOversell).toBe(false);
+    // The owner opted in, or recipe deduction is paused: the server lets the
+    // sale through, so the till must not stop it either.
+    const [optedIn] = await build(true, 3_000).findForPos(TENANT, BRANCH);
+    expect(optedIn.canOversell).toBe(true);
+    const [paused] = await build(false, 3_000, /*deductionPaused*/ true).findForPos(TENANT, BRANCH);
+    expect(paused.canOversell).toBe(true);
   });
 });

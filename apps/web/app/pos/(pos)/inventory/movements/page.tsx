@@ -235,8 +235,9 @@ export default function StockMovementsPage() {
                 const after     = stockAfter(m);
                 const reference = referenceText(m.reference);
                 const by        = doneBy(m);
+                // No hover tint on the row: it opens nothing, and a highlight that answers a tap with nothing reads as broken.
                 return (
-                  <tr key={`${m.kind}-${m.id}`} className="hover:bg-muted/40 transition-colors">
+                  <tr key={`${m.kind}-${m.id}`}>
                     {/* Date */}
                     <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap tabular-nums">
                       {new Date(m.occurredAt).toLocaleString('en-PH', {

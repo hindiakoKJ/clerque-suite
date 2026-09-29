@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { productCeiling, LimitedBy } from './recipe-ceiling';
+import { productCeiling, ceilingOf, LimitedBy, RecipeLine } from './recipe-ceiling';
 import { missingCostWhere, UNPRICED_INGREDIENT, unpricedIngredientNames } from './missing-cost';
 import { heldUsage, heldAt, availableQty, HeldMap } from '../orders/held-usage';
 import { Prisma, DrugClass } from '@prisma/client';
@@ -18,6 +18,21 @@ import { hasPermission, planFeaturesFor } from '@repo/shared-types';
 function freeStock(onHand: number, held: number): number {
   return held > 0 ? availableQty(onHand, held) : onHand;
 }
+
+/**
+ * What the till loads with each modifier option: the ingredients a sale adds
+ * for it, each with its name and reorder point, so the picker can grey out an
+ * add-on whose ingredient has run out (see findForPos).
+ */
+const POS_OPTION_INGREDIENTS = {
+  ingredients: {
+    select: {
+      rawMaterialId: true,
+      quantity:      true,
+      rawMaterial:   { select: { id: true, name: true, unit: true, lowStockAlert: true } },
+    },
+  },
+} as const;
 
 /**
  * Sprint 19 — Single source of truth for the Product.isRxRequired and
@@ -116,6 +131,9 @@ export class ProductsService {
     // recipe product's true costPrice live (overriding any stale value
     // stored on Product.costPrice).
     let rmCostMap  = new Map<string, number>();
+    // Each ingredient's own reorder point, so the table's LOW mark can follow
+    // it the way the till does (see findForPos).
+    let rmAlertMap = new Map<string, number>();
     {
       const allRmIds = new Set<string>();
       for (const p of products) {
@@ -127,9 +145,10 @@ export class ProductsService {
         // Costs (always loaded — recipe cost derives from these)
         const rmRows = await this.prisma.rawMaterial.findMany({
           where:  { id: { in: Array.from(allRmIds) } },
-          select: { id: true, costPrice: true },
+          select: { id: true, costPrice: true, lowStockAlert: true },
         });
         rmCostMap = new Map(rmRows.map((r) => [r.id, r.costPrice != null ? Number(r.costPrice) : 0]));
+        rmAlertMap = new Map(rmRows.filter((r) => r.lowStockAlert != null).map((r) => [r.id, Number(r.lowStockAlert)]));
 
         // Stocks (only when a branch is in scope — used for max-producible)
         if (branchId) {
@@ -151,6 +170,10 @@ export class ProductsService {
 
     return products.map((p) => {
       let stockQty: number | null = null;
+      // The ingredient that set the ceiling: its free stock and its own
+      // reorder point, when the owner set one.
+      let limitStock: number | null = null;
+      let limitReorder: number | null = null;
       if (branchId) {
         if (p.inventoryMode === 'RECIPE_BASED') {
           if (p.bomItems.length === 0) {
@@ -162,7 +185,11 @@ export class ProductsService {
               const perUnit = Number(bom.quantity);
               if (perUnit <= 0) continue;
               const producible = Math.floor(stock / perUnit);
-              if (producible < min) min = producible;
+              if (producible < min) {
+                min = producible;
+                limitStock = stock;
+                limitReorder = rmAlertMap.get(bom.rawMaterialId) ?? null;
+              }
             }
             stockQty = min === Number.POSITIVE_INFINITY ? 0 : min;
           }
@@ -174,9 +201,13 @@ export class ProductsService {
       }
       const lowStockAlert = (p as { inventory?: { lowStockAlert: unknown }[] }).inventory?.[0]?.lowStockAlert;
       const lowAlert = lowStockAlert != null ? Number(lowStockAlert) : null;
+      // Low when the owner's per-product threshold is hit, when the limiting
+      // ingredient is at or under its own reorder point, or -- with no
+      // threshold set anywhere on the product -- at five servings.
       const isLowStock =
         stockQty != null &&
         ((lowAlert != null && stockQty <= lowAlert) ||
+         (limitReorder != null && limitStock != null && limitStock <= limitReorder) ||
          (lowAlert == null && p.inventoryMode === 'RECIPE_BASED' && stockQty <= 5));
 
       // Sprint 8: derive recipe products' costPrice from BOM × ingredient
@@ -735,9 +766,14 @@ export class ProductsService {
     // once here rather than per product.
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },
-      select: { allowSaleWhenOutOfStock: true },
+      select: { allowSaleWhenOutOfStock: true, recipeDeductionPausedAt: true },
     });
     const allowSaleWhenOutOfStock = tenant?.allowSaleWhenOutOfStock === true;
+    // The till stops a line at maxProducible so the cashier is not told "not
+    // enough milk" only at Charge. orders.service does not refuse for a shop
+    // that opted to sell past the count, nor while recipe deduction is
+    // paused, so the till must not either.
+    const canOversell = allowSaleWhenOutOfStock || tenant?.recipeDeductionPausedAt != null;
 
     // Step 1: resolve the customer's price list (if any). One DB hit; no-op
     // when customerId is missing or the customer has no list assigned.
@@ -783,7 +819,7 @@ export class ProductsService {
               select: {
                 rawMaterialId: true,
                 quantity: true,
-                rawMaterial: { select: { id: true, name: true, unit: true } },
+                rawMaterial: { select: { id: true, name: true, unit: true, lowStockAlert: true } },
               },
             },
           },
@@ -796,14 +832,18 @@ export class ProductsService {
           select: {
             rawMaterialId: true,
             quantity: true,
-            rawMaterial: { select: { id: true, name: true, unit: true } },
+            // The ingredient's own reorder point rides along so the LOW badge
+            // can follow it instead of a count of cups.
+            rawMaterial: { select: { id: true, name: true, unit: true, lowStockAlert: true } },
           },
         },
+        // Each option's own ingredients too: a sale takes them (oat milk for
+        // an oat latte), so the picker has to know when they have run out.
         modifierGroups: {
           include: {
             modifierGroup: {
               include: {
-                options: { where: { isActive: true }, orderBy: { sortOrder: 'asc' } },
+                options: { where: { isActive: true }, orderBy: { sortOrder: 'asc' }, include: POS_OPTION_INGREDIENTS },
               },
             },
           },
@@ -824,7 +864,7 @@ export class ProductsService {
     const catGroups = categoryIds.length
       ? await this.prisma.modifierGroup.findMany({
           where:   { tenantId, isActive: true, categoryId: { in: categoryIds } },
-          include: { options: { where: { isActive: true }, orderBy: { sortOrder: 'asc' } } },
+          include: { options: { where: { isActive: true }, orderBy: { sortOrder: 'asc' }, include: POS_OPTION_INGREDIENTS } },
           orderBy: { sortOrder: 'asc' },
         })
       : [];
@@ -860,6 +900,13 @@ export class ProductsService {
         for (const b of p.bomItems) allRawMaterialIds.add(b.rawMaterialId);
         for (const v of p.variants) for (const b of v.variantBomItems) allRawMaterialIds.add(b.rawMaterialId);
       }
+      // An add-on's ingredients are taken by the sale whatever the product's
+      // mode (a syrup on a bottled drink too), so their stock is read for all.
+      for (const mg of p.modifierGroups) {
+        for (const o of mg.modifierGroup.options) {
+          for (const ing of o.ingredients ?? []) allRawMaterialIds.add(ing.rawMaterialId);
+        }
+      }
     }
 
     let rmStockMap = new Map<string, number>();
@@ -894,6 +941,25 @@ export class ProductsService {
       const onTickets = limit ? heldAt(held, branchId, limit.rawMaterialId) : 0;
       return limit && onTickets > 0 ? { ...limit, held: onTickets } : limit;
     };
+    const stockOf = (id: string) => rmStockMap.get(id) ?? 0;
+
+    /*
+      Whether an add-on can still be made.
+
+      The sale takes an option's own ingredients (oat milk for an oat latte),
+      so a tile could read a green "22 left" while the oat milk behind one of
+      its options was at zero -- and the cashier learned only when Charge was
+      refused. The option carries the same ceiling the tile does, so the
+      picker can grey it out. Only what an option ADDS counts: a line that
+      takes an ingredient away (no dairy in an oat latte) needs no stock. An
+      option with nothing to add is not limited by anything.
+    */
+    const optionAvailability = (o: { ingredients?: RecipeLine[] | null }) => {
+      const adds = (o.ingredients ?? []).filter((ing) => Number(ing.quantity) > 0);
+      if (adds.length === 0) return { maxProducible: null as number | null, limitedBy: null as ReturnType<typeof withHeld>, isOutOfStock: false };
+      const c = ceilingOf(adds, stockOf);
+      return { maxProducible: c.max, limitedBy: withHeld(c.limitedBy), isOutOfStock: c.max === 0 && !allowSaleWhenOutOfStock };
+    };
 
     const tiles = products.map((p) => {
       let maxProducible: number | null = null;
@@ -918,7 +984,7 @@ export class ProductsService {
           it. One rule in recipe-ceiling.ts, so the buy list's "menu can sell
           now" is the number this tile shows.
         */
-        const ceiling = productCeiling(p, (id) => rmStockMap.get(id) ?? 0);
+        const ceiling = productCeiling(p, stockOf);
         maxProducible   = ceiling.maxProducible;
         limitedBy       = withHeld(ceiling.limitedBy);
         variantCeilings = ceiling.variantCeilings.map((v) => ({ ...v, limitedBy: withHeld(v.limitedBy) }));
@@ -928,10 +994,23 @@ export class ProductsService {
         maxProducible = inv ? Number(inv.quantity) : null;
       }
 
+      /*
+        When the tile turns amber.
+
+        A recipe product has no shelf row of its own, so "5 cups left" was
+        the only warning a drink ever gave -- minutes of runway, whatever
+        reorder point the owner had set on the milk. The ingredient that
+        sets the ceiling now brings its own reorder level, and the badge
+        follows it: low when the milk is at or under the point the owner
+        set on the milk. A per-product threshold (in servings) still counts
+        when set, and with no threshold anywhere the default stays at five.
+      */
       const lowStockAlert = p.inventory[0]?.lowStockAlert ?? null;
+      const reorderLevel  = limitedBy?.reorderLevel ?? null;
       const isLowStock =
         maxProducible != null &&
         ((lowStockAlert != null && maxProducible <= lowStockAlert) ||
+         (reorderLevel != null && limitedBy != null && limitedBy.stock <= reorderLevel) ||
          (lowStockAlert == null && maxProducible <= 5)); // sensible default for recipes
       // `isOutOfStock` drives a DISABLED tile in the POS grid. A shop still
       // setting up — recipes entered, ingredient counts not yet — would see
@@ -949,6 +1028,18 @@ export class ProductsService {
 
       return {
         ...p,
+        // Each option says whether it can still be made; its recipe lines
+        // stay on the server.
+        modifierGroups: p.modifierGroups.map((mg) => ({
+          ...mg,
+          modifierGroup: {
+            ...mg.modifierGroup,
+            options: mg.modifierGroup.options.map((o) => {
+              const { ingredients: _lines, ...option } = o;
+              return { ...option, ...optionAvailability(o) };
+            }),
+          },
+        })),
         price:            effectivePrice,
         defaultPrice,                            // original Product.price, even if overridden
         priceListOverride: override
@@ -965,6 +1056,7 @@ export class ProductsService {
         variantCeilings,
         isLowStock,
         isOutOfStock,
+        canOversell,
       };
     });
 

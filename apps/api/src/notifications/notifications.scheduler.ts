@@ -23,6 +23,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { heldUsage, heldAt, availableQty } from '../orders/held-usage';
+import { learnedLevels } from '../inventory/learned-levels';
 import { COST_DECIDER_ROLES } from '../procure/cost-visibility';
 import type { UserRole } from '@prisma/client';
 
@@ -159,6 +160,8 @@ export class NotificationsScheduler {
       const held = await heldUsage(this.prisma, tenantId, branches.map((b) => b.id));
 
       for (const b of branches) {
+        // The level each ingredient has earned from this branch's own use, where none was typed.
+        const learned = await learnedLevels(this.prisma, tenantId, b.id);
         const rows = await this.prisma.rawMaterial.findMany({
           where:  { tenantId, isActive: true },
           select: {
@@ -184,9 +187,9 @@ export class NotificationsScheduler {
         });
         for (const r of rows) {
           const onHand = availableQty(Number(r.inventory[0]?.quantity ?? 0), heldAt(held, b.id, r.id));
-          const level  = r.lowStockAlert != null ? Number(r.lowStockAlert) : null;
-          const where  = branches.length > 1 ? ` (${b.name})` : '';
           const isPrep = r.subRecipeItems.length > 0;
+          const level  = r.lowStockAlert != null ? Number(r.lowStockAlert) : (isPrep ? null : (learned.get(r.id) ?? null));
+          const where  = branches.length > 1 ? ` (${b.name})` : '';
           if (isPrep) {
             const readyToUse = (r.bomItems ?? []).length > 0;
             // The only prep stage behind an active ready-to-use prep with a par: the rotation checks exactly that one.
@@ -228,7 +231,7 @@ export class NotificationsScheduler {
       }
       if (unwatched > 0) {
         parts.push(`${unwatched} ingredient${unwatched === 1 ? '' : 's'} ` +
-          `${unwatched === 1 ? 'has' : 'have'} no reorder level, so ` +
+          `${unwatched === 1 ? 'has' : 'have'} no reorder level and no sales in the last two weeks to learn one from, so ` +
           `${unwatched === 1 ? 'it is' : 'they are'} not being watched at all.`);
       }
 

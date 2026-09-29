@@ -286,7 +286,13 @@ describe('ProcureService', () => {
         // "nothing is below its reorder level" and "nobody is watching" used
         // to look identical on screen.
         count: jest.fn().mockResolvedValue(opts.unmonitored ?? 0),
+        // The same count, read as rows: the ones with no typed level, before the learned
+        // levels (none here: this mock has no sales to learn from) take theirs off.
+        findMany: jest.fn(({ where }: any) => Promise.resolve(where?.lowStockAlert === null
+          ? Array.from({ length: opts.unmonitored ?? 0 }, (_: unknown, i: number) => ({ id: `rm-unwatched-${i}` }))
+          : [])),
       },
+      branch: { findFirst: jest.fn().mockResolvedValue({ id: 'branch-1' }) },
       $transaction: jest.fn((ops: any) => Array.isArray(ops) ? Promise.all(ops) : ops(prisma)),
     };
     const inventory: any = {

@@ -487,8 +487,8 @@ export default function SettingsPage() {
               <SettingsCard
                 href="/settings/sod-violations"
                 icon={ShieldAlert}
-                title="SOD Violations"
-                desc="Audit-trail of permission overrides"
+                title="Role-change conflicts"
+                desc="Staff who have held roles that should stay separate"
               />
             )}
             {/* Telegram alerts: each owner or branch manager links their own phone. */}
@@ -775,7 +775,10 @@ export default function SettingsPage() {
               <PurchaseCostVisibilityCard profile={profile} qc={qc} />
             )}
 
-            {/* ── Maker-checker void threshold (Sprint 25, Solo Pro) ────────── */}
+            {/* ── Maker-checker void threshold (Sprint 25, Solo Pro) ──────────
+                The till has no screen to request or grant a void approval yet, so
+                this card only renders a "Turn off" notice when a threshold is
+                already set; it no longer lets the owner arm the gate. */}
             {isOwner && profile && (
               <VoidApprovalThresholdCard profile={profile} qc={qc} />
             )}
@@ -1297,8 +1300,19 @@ export default function SettingsPage() {
                           <RotateCcw className="w-3 h-3" />
                         </button>
                         <button
-                          onClick={() => updateUserMut.mutate({ id: u.id, data: { isActive: !u.isActive } })}
-                          className={`text-xs px-2 py-1 rounded-lg border transition-colors ${
+                          onClick={() => {
+                            // Deactivating signs the person out at once (server drops
+                            // their sessions), so ask first. Reactivating is harmless.
+                            if (
+                              u.isActive &&
+                              !window.confirm(`Deactivate ${u.name}? They will be signed out immediately.`)
+                            ) {
+                              return;
+                            }
+                            updateUserMut.mutate({ id: u.id, data: { isActive: !u.isActive } });
+                          }}
+                          disabled={updateUserMut.isPending}
+                          className={`text-xs px-2 py-1 rounded-lg border transition-colors disabled:opacity-50 ${
                             u.isActive
                               ? 'text-red-500 border-red-400/30 hover:bg-red-500/5'
                               : 'text-green-600 border-green-400/30 hover:bg-green-500/5'
@@ -2002,83 +2016,57 @@ function ReturnsPolicyCard({
 }
 
 // ── Sprint 25 — Maker-checker void approval threshold card ────────────────
+//
+// The API blocks any void at or above `voidApprovalThresholdCents` until a
+// VoidApproval row is approved, but the tenant web app has no screen that
+// creates or approves one (POST /void-approvals has no caller; the only
+// review page lives under /admin, which the tenant domain cannot reach).
+// Letting the owner set a threshold therefore only blocks voids at the till.
+//
+// Until the request/approve loop ships on the tenant side, this card does
+// not offer the input at all. If a threshold is already set (armed before
+// this change), it explains why voids are failing and offers a one-click
+// "Turn off" so the owner can unblock staff.
 
 function VoidApprovalThresholdCard({
   profile, qc,
 }: { profile: { voidApprovalThresholdCents?: number | null }; qc: ReturnType<typeof useQueryClient> }) {
-  const initialCents = profile.voidApprovalThresholdCents ?? 0;
-  const [pesos, setPesos] = useState<string>(initialCents > 0 ? String(initialCents / 100) : '');
-  const enabled = (parseFloat(pesos || '0') > 0);
+  const currentCents = profile.voidApprovalThresholdCents ?? 0;
 
-  const updateMut = useMutation({
-    mutationFn: (nextCents: number) =>
-      api.patch('/tenant/profile', { voidApprovalThresholdCents: nextCents }).then((r) => r.data),
+  const turnOffMut = useMutation({
+    mutationFn: () =>
+      api.patch('/tenant/profile', { voidApprovalThresholdCents: 0 }).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tenant-profile'] });
-      toast.success('Void approval threshold updated.');
+      toast.success('Void approval threshold turned off. Staff can void again.');
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message ?? 'Failed to update threshold.');
+      toast.error(err?.response?.data?.message ?? 'Failed to turn off the threshold.');
     },
   });
 
-  function save() {
-    const peso = parseFloat(pesos || '0');
-    if (!Number.isFinite(peso) || peso < 0) {
-      toast.error('Enter a non-negative number.');
-      return;
-    }
-    updateMut.mutate(Math.round(peso * 100));
-  }
+  if (currentCents <= 0) return null;
 
-  function disable() {
-    setPesos('');
-    updateMut.mutate(0);
-  }
+  const pesos = `₱${(currentCents / 100).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`;
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+    <div className="rounded-xl border border-amber-400/30 bg-amber-500/5 p-4 space-y-3">
       <div>
-        <h3 className="text-sm font-semibold text-foreground">Maker-checker Void Approvals</h3>
+        <h3 className="text-sm font-semibold text-foreground">Void approvals</h3>
         <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
-          When set above ₱0, voids/refunds at or above this amount require a manager to approve before they
-          can be processed at the POS. Set to ₱0 to turn this off.
+          Voids and refunds of {pesos} or more are set to need a manager&apos;s approval, but the till has no
+          way to ask for or give that approval yet. Until it does, those voids are blocked. Turn this off
+          so staff can void again.
         </p>
       </div>
-      <div className="flex items-end gap-2 flex-wrap">
-        <div>
-          <label className="block text-xs font-semibold text-foreground mb-1">Threshold (₱)</label>
-          <input
-            type="number"
-            min={0}
-            step="0.01"
-            value={pesos}
-            onChange={(e) => setPesos(e.target.value)}
-            placeholder="0.00"
-            className="h-9 w-40 px-3 rounded-md border border-border bg-background text-sm font-mono"
-          />
-        </div>
-        <button
-          onClick={save}
-          disabled={updateMut.isPending}
-          className="h-9 px-3 rounded-lg text-sm font-medium text-white disabled:opacity-50"
-          style={{ background: 'var(--accent)' }}
-        >
-          {updateMut.isPending ? 'Saving…' : 'Save threshold'}
-        </button>
-        {enabled && (
-          <button
-            onClick={disable}
-            disabled={updateMut.isPending}
-            className="h-9 px-3 rounded-lg text-sm border border-border text-muted-foreground hover:bg-muted/40"
-          >
-            Disable
-          </button>
-        )}
-      </div>
-      <p className="text-[11px] text-muted-foreground">
-        Current: {initialCents > 0 ? `₱${(initialCents / 100).toLocaleString('en-PH', { minimumFractionDigits: 2 })}` : 'Disabled'}
-      </p>
+      <button
+        onClick={() => turnOffMut.mutate()}
+        disabled={turnOffMut.isPending}
+        className="h-9 px-3 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+        style={{ background: 'var(--accent)' }}
+      >
+        {turnOffMut.isPending ? 'Turning off…' : 'Turn off'}
+      </button>
     </div>
   );
 }

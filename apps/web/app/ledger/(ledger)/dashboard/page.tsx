@@ -40,7 +40,6 @@ interface ProcessMetrics {
   };
   control: {
     pendingExpenseClaims: number;
-    sodOverridesLast30d:  number;
     productsMissingCost:  number;
     auditEntriesLast24h:  number;
     offlineSyncsLast24h:  number;
@@ -62,6 +61,9 @@ function fmtPct(p: number) {
 }
 
 type Severity = 'good' | 'warn' | 'bad' | 'neutral';
+
+// Same wording as the locked sidebar items (layout.tsx FULL_BOOKS_LOCK).
+const FULL_BOOKS_HINT = 'Switch the books to Full in Settings > Ledger mode to open this (the owner does this)';
 
 const SEVERITY_STYLES: Record<Severity, { border: string; text: string; bg: string; }> = {
   good:    { border: 'border-emerald-500/40', text: 'text-emerald-400',  bg: 'bg-emerald-500/5' },
@@ -140,6 +142,22 @@ export default function LedgerDashboardPage() {
   // An accountant or bookkeeper cannot open the POS: sending them to
   // /pos/products only threw them out to the app picker.
   const canOpenPos = !!user && canEnterApp('pos', user.role);
+  // Simple books (and plans without full accounting) cannot open the full-
+  // accounting screens: the sidebar hides them and their APIs refuse. The
+  // cards routed there anyway, so a Simple-books owner landed on a blank
+  // page with no way back. Same flag the sidebar uses for its locks.
+  const isFullLedger = user?.planFeatures?.advancedAccounting ?? false;
+  // A card is a link only when the screen behind it will actually open.
+  const goFull = (path: string) => (isFullLedger ? () => router.push(path) : undefined);
+  // A "go fix it" link in the alert list: a real link when the screen opens,
+  // otherwise a plain sentence saying what to switch on.
+  const fixLink = (path: string, label: string) => isFullLedger ? (
+    <button onClick={() => router.push(path)} className="text-red-400 hover:underline flex items-center gap-1">
+      {label} <ArrowRight className="w-3 h-3" />
+    </button>
+  ) : (
+    <span className="text-muted-foreground text-right">{FULL_BOOKS_HINT}</span>
+  );
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery<ProcessMetrics>({
     queryKey: ['ledger-process-metrics'],
@@ -162,7 +180,6 @@ export default function LedgerDashboardPage() {
     voidRate:    !data ? 'neutral' : data.accuracy.voidRateLast30d <= 0.02        ? 'good' : data.accuracy.voidRateLast30d <= 0.05      ? 'warn' : 'bad',
     reopens:     !data ? 'neutral' : data.accuracy.reopensLast90d === 0           ? 'good' : data.accuracy.reopensLast90d <= 1          ? 'warn' : 'bad',
 
-    sodOverride: !data ? 'neutral' : data.control.sodOverridesLast30d === 0       ? 'good' : data.control.sodOverridesLast30d <= 2      ? 'warn' : 'bad',
     missingCost: !data ? 'neutral' : data.control.productsMissingCost === 0       ? 'good' : data.control.productsMissingCost <= 5      ? 'warn' : 'bad',
     pendingClaims: !data ? 'neutral' : data.control.pendingExpenseClaims === 0    ? 'good' : data.control.pendingExpenseClaims <= 5     ? 'warn' : 'bad',
   } as const;
@@ -222,17 +239,13 @@ export default function LedgerDashboardPage() {
                 {!data.accuracy.isBalanced && (
                   <li className="flex justify-between">
                     <span>Trial Balance is out of balance: variance {fmtPeso(data.accuracy.tbVariance)}</span>
-                    <button onClick={() => router.push('/ledger/trial-balance')} className="text-red-400 hover:underline flex items-center gap-1">
-                      Investigate <ArrowRight className="w-3 h-3" />
-                    </button>
+                    {fixLink('/ledger/trial-balance', 'Investigate')}
                   </li>
                 )}
                 {data.timeliness.failedEvents > 0 && (
                   <li className="flex justify-between">
                     <span>{data.timeliness.failedEvents} POS event{data.timeliness.failedEvents === 1 ? '' : 's'} stuck in FAILED</span>
-                    <button onClick={() => router.push('/ledger/events')} className="text-red-400 hover:underline flex items-center gap-1">
-                      Triage <ArrowRight className="w-3 h-3" />
-                    </button>
+                    {fixLink('/ledger/events', 'Triage')}
                   </li>
                 )}
                 {data.control.productsMissingCost > 0 && (
@@ -250,9 +263,7 @@ export default function LedgerDashboardPage() {
                 {(data.timeliness.daysSinceLastClose ?? 0) > 60 && (
                   <li className="flex justify-between">
                     <span>Last period close was {data.timeliness.daysSinceLastClose} days ago</span>
-                    <button onClick={() => router.push('/ledger/periods')} className="text-red-400 hover:underline flex items-center gap-1">
-                      Close period <ArrowRight className="w-3 h-3" />
-                    </button>
+                    {fixLink('/ledger/periods', 'Close period')}
                   </li>
                 )}
               </ul>
@@ -281,7 +292,7 @@ export default function LedgerDashboardPage() {
                   sub="Awaiting auto-post. Cron runs every minute."
                   severity={sev.pending}
                   icon={Inbox}
-                  onClick={() => router.push('/ledger/events')}
+                  onClick={goFull('/ledger/events')}
                 />
                 <MetricCard
                   label="Failed Events"
@@ -289,7 +300,7 @@ export default function LedgerDashboardPage() {
                   sub="Stuck — needs manual triage."
                   severity={sev.failed}
                   icon={XCircle}
-                  onClick={() => router.push('/ledger/events')}
+                  onClick={goFull('/ledger/events')}
                 />
               </PosOnly>
               <MetricCard
@@ -309,7 +320,7 @@ export default function LedgerDashboardPage() {
                 value={data.timeliness.daysSinceLastClose == null ? 'Never' : `${data.timeliness.daysSinceLastClose} d ago`}
                 sub="Days since the most recent monthly close. Target: ≤ 35."
                 severity={sev.closeAge}
-                onClick={() => router.push('/ledger/periods')}
+                onClick={goFull('/ledger/periods')}
               />
             </div>
           </section>
@@ -330,7 +341,7 @@ export default function LedgerDashboardPage() {
                   : `Variance ${fmtPeso(data.accuracy.tbVariance)}`}
                 severity={sev.balanced}
                 icon={data.accuracy.isBalanced ? CheckCircle2 : AlertTriangle}
-                onClick={() => router.push('/ledger/trial-balance')}
+                onClick={goFull('/ledger/trial-balance')}
               />
               <PosOnly enabled={posEnabled}>
                 <MetricCard
@@ -375,7 +386,7 @@ export default function LedgerDashboardPage() {
                 value={String(data.volume.jesToday)}
                 sub="Posted journal entries."
                 severity="neutral"
-                onClick={() => router.push('/ledger/journal')}
+                onClick={goFull('/ledger/journal')}
               />
               <MetricCard
                 label="JEs This Month"
@@ -396,14 +407,14 @@ export default function LedgerDashboardPage() {
                 value={String(data.volume.openArInvoices)}
                 sub={`Outstanding ${fmtPeso(data.volume.openArValue)}`}
                 severity="neutral"
-                onClick={() => router.push('/ledger/ar/billing')}
+                onClick={goFull('/ledger/ar/billing')}
               />
               <MetricCard
                 label="Open AP"
                 value={String(data.volume.openApBills)}
                 sub={`Net payable ${fmtPeso(data.volume.openApValue)}`}
                 severity="neutral"
-                onClick={() => router.push('/ledger/ap/bills')}
+                onClick={goFull('/ledger/ap/bills')}
               />
               <PosOnly enabled={posEnabled}>
                 <MetricCard
@@ -430,27 +441,16 @@ export default function LedgerDashboardPage() {
                 sub="Expense claims awaiting approval."
                 severity={sev.pendingClaims}
                 icon={Inbox}
-                onClick={() => router.push('/ledger/expense-approvals')}
+                onClick={goFull('/ledger/expense-approvals')}
               />
               {/*
-                REMOVED: the SOD Overrides tile.
-
-                It read zero and showed green because nothing is instrumented,
-                not because the shop was clean. User.sodOverrides is written at
-                user creation and read nowhere; the staff form never sends it;
-                the permission editor evaluates its warning entirely in the
-                browser. So the counter could only ever be 0, and a control
-                tile that can only say "fine" is worse than no tile — it is an
-                assurance nobody earned, on the one screen an owner checks to
-                see whether anything needs attention.
-
-                Not "fixed" by wiring it up, because there is no override
-                mechanism to instrument. If preventive SOD is ever built, the
-                tile comes back with something behind it. Until then the honest
-                display is nothing.
-
-                The counter still exists in the API and the export, so no data
-                is lost — only the false green.
+                No SOD Overrides tile. It read zero and showed green because
+                nothing records an override (User.sodOverrides is never written
+                from the UI; the permission editor evaluates its warning in the
+                browser), so the counter could only ever say "fine" — an
+                assurance nobody earned. The API counter and its KPI export row
+                went with it. If preventive SOD is ever built, the tile comes
+                back with something behind it.
               */}
               <PosOnly enabled={posEnabled}>
                 <MetricCard
@@ -467,7 +467,7 @@ export default function LedgerDashboardPage() {
                 value={String(data.control.auditEntriesLast24h)}
                 sub="Logged sensitive actions in last day."
                 severity="neutral"
-                onClick={() => router.push('/ledger/audit')}
+                onClick={goFull('/ledger/audit')}
               />
               <MetricCard
                 label="JE Posted Today"
@@ -481,7 +481,11 @@ export default function LedgerDashboardPage() {
           {/* Methodology footer */}
           <div className="text-xs text-muted-foreground border-t border-border pt-4 leading-relaxed space-y-1">
             <p><strong>How we compute these.</strong> Process metrics are derived live from the database — no caching. DSO/DPO are weighted averages over the last 90 days of paid invoices/bills. Event Lag is the average time from event creation to JE creation across the last 24 hours. The good / warning / bad colours use sensible defaults for a small business.</p>
-            <p>For account-level financials (revenue by GL account, expense balances) see <button onClick={() => router.push('/ledger/trial-balance')} className="underline hover:text-foreground">Trial Balance</button>, <button onClick={() => router.push('/ledger/pl-statement')} className="underline hover:text-foreground">Income Statement</button>, and <button onClick={() => router.push('/ledger/balance-sheet')} className="underline hover:text-foreground">Balance Sheet</button>.</p>
+            {isFullLedger ? (
+              <p>For account-level financials (revenue by GL account, expense balances) see <button onClick={() => router.push('/ledger/trial-balance')} className="underline hover:text-foreground">Trial Balance</button>, <button onClick={() => router.push('/ledger/pl-statement')} className="underline hover:text-foreground">Income Statement</button>, and <button onClick={() => router.push('/ledger/balance-sheet')} className="underline hover:text-foreground">Balance Sheet</button>.</p>
+            ) : (
+              <p>Account-level financials (Trial Balance, Income Statement, Balance Sheet) open once the books are switched to Full in Settings &gt; Ledger mode. The owner does this.</p>
+            )}
           </div>
         </div>
       )}

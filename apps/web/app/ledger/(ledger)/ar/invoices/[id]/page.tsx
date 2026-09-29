@@ -11,9 +11,10 @@
  * can verify what they're about to send before they click.
  */
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Download, Mail, X } from 'lucide-react';
+import { ArrowLeft, Download, Mail, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatPeso } from '@/lib/utils';
@@ -93,6 +94,10 @@ export default function ArInvoiceDetailPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
+      <Link href="/ledger/ar/billing" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <ArrowLeft className="w-4 h-4" /> Back to Invoices
+      </Link>
+
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>

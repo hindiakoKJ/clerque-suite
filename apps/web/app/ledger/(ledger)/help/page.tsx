@@ -113,7 +113,6 @@ const SECTIONS: HelpSection[] = [
         a: (
           <ul className="list-disc pl-5 space-y-1">
             <li><strong>Pending Claims</strong> — expense claims awaiting your approval. High count = bottleneck.</li>
-            <li><strong>SOD Overrides (30d)</strong> — times an owner overrode a Segregation-of-Duties warning when assigning permissions. Target: 0. Each override is logged with reason.</li>
             <li><strong>Products Missing Cost</strong> — active products with no cost price. Each one breaks COGS posting on its sales, overstating profit. Target: 0.</li>
             <li><strong>Audit Entries (24h)</strong> — total logged sensitive actions. Spike = unusual activity, worth a glance.</li>
           </ul>

@@ -129,8 +129,11 @@ export default function InventoryPage() {
   const [editMatThreshold,    setEditMatThreshold]    = useState<{ id: string; value: string } | null>(null);
   const [savingMatThreshold,  setSavingMatThreshold]  = useState(false);
 
+  // Mirrors STOCK_ROLES in procure/layout.tsx and the API's @Roles on every
+  // raw-material write: a branch manager the tile lets in must get the buttons.
   const canEdit = user?.role === 'BUSINESS_OWNER' || user?.role === 'MDM'
-               || user?.role === 'SUPER_ADMIN' || user?.role === 'WAREHOUSE_STAFF';
+               || user?.role === 'SUPER_ADMIN' || user?.role === 'WAREHOUSE_STAFF'
+               || user?.role === 'BRANCH_MANAGER';
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
@@ -714,7 +717,7 @@ export default function InventoryPage() {
       {/* ── Ingredient Create/Edit Modal ─────────────────────────────────────── */}
       {(matModal === 'create' || matModal === 'edit') && (
         <div className="fixed inset-0 bg-foreground/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto">
             <div className="px-6 py-4 border-b border-border">
               <h2 className="font-semibold text-foreground">
                 {matModal === 'create' ? 'New Ingredient' : 'Edit Ingredient'}
@@ -907,7 +910,7 @@ export default function InventoryPage() {
       {/* ── Receive Stock Modal ───────────────────────────────────────────────── */}
       {matModal === 'writeoff' && editingMat && (
         <div className="fixed inset-0 bg-foreground/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto">
             <div className="px-6 py-4 border-b border-border">
               <h2 className="font-semibold text-foreground">Write off stock</h2>
               <p className="mt-0.5 text-xs text-muted-foreground">
@@ -1002,7 +1005,7 @@ export default function InventoryPage() {
 
       {matModal === 'receive' && editingMat && (
         <div className="fixed inset-0 bg-foreground/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm">
+          <div className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto">
             <div className="px-6 py-4 border-b border-border">
               <h2 className="font-semibold text-foreground">Receive Stock</h2>
               <p className="text-xs text-muted-foreground mt-0.5">

@@ -10,6 +10,12 @@ interface ModifierOption {
   priceAdjustment: number | string;
   isDefault: boolean;
   isActive: boolean;
+  /** How many more of this add-on the shelf can make; null when it takes no ingredient. */
+  maxProducible?: number | null;
+  /** The add-on's ingredient has run out: shown greyed, cannot be picked. */
+  isOutOfStock?: boolean;
+  /** The ingredient that ran out. */
+  limitedBy?: { name: string } | null;
 }
 
 interface ModifierGroup {
@@ -49,7 +55,9 @@ export function ModifierPickerModal({
     for (const { modifierGroup: g } of modifierGroups) {
       init[g.id] = new Set();
       for (const opt of g.options) {
-        if (opt.isDefault) init[g.id].add(opt.id);
+        // A default whose ingredient has run out is not pre-picked: the
+        // cashier chooses something the bar can make.
+        if (opt.isDefault && !opt.isOutOfStock) init[g.id].add(opt.id);
       }
     }
     return init;
@@ -146,12 +154,19 @@ export function ModifierPickerModal({
                 {g.options.filter((o) => o.isActive).map((opt) => {
                   const isSelected = selected[g.id]?.has(opt.id) ?? false;
                   const adj = Number(opt.priceAdjustment);
+                  // The add-on's own ingredient has run out (oat milk at
+                  // zero): greyed and named, so the cashier does not find
+                  // out at Charge.
+                  const isOut = !!opt.isOutOfStock;
                   return (
                     <button
                       key={opt.id}
-                      onClick={() => toggle(g, opt.id)}
+                      onClick={() => !isOut && toggle(g, opt.id)}
+                      disabled={isOut}
                       className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all text-left ${
-                        isSelected
+                        isOut
+                          ? 'border-border bg-muted opacity-60 cursor-not-allowed'
+                          : isSelected
                           ? 'border-[var(--counter-primary)] bg-[var(--counter-primary-container)]'
                           : 'border-border bg-card shadow-sm hover:border-[var(--counter-primary)]/40'
                       }`}
@@ -159,13 +174,21 @@ export function ModifierPickerModal({
                     >
                       <span className="font-display text-sm font-semibold">{opt.name}</span>
                       <div className="flex items-center gap-2.5">
-                        {adj > 0 && (
-                          <span className="font-mono-counter tnum text-xs font-semibold" style={{ color: 'var(--counter-primary-press)' }}>
-                            +{formatPeso(adj)}
+                        {isOut ? (
+                          <span className="text-xs font-semibold text-muted-foreground">
+                            {opt.limitedBy ? `Out of ${opt.limitedBy.name}` : 'Out of stock'}
                           </span>
-                        )}
-                        {adj === 0 && (
-                          <span className="text-xs text-muted-foreground">Included</span>
+                        ) : (
+                          <>
+                            {adj > 0 && (
+                              <span className="font-mono-counter tnum text-xs font-semibold" style={{ color: 'var(--counter-primary-press)' }}>
+                                +{formatPeso(adj)}
+                              </span>
+                            )}
+                            {adj === 0 && (
+                              <span className="text-xs text-muted-foreground">Included</span>
+                            )}
+                          </>
                         )}
                         <div
                           className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${

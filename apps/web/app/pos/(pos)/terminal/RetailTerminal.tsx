@@ -27,6 +27,7 @@ type RetailProduct = CachedProduct & {
   inventory?: { quantity: string | number }[];
   isLowStock?: boolean;
   isOutOfStock?: boolean;
+  canOversell?: boolean;
   isAgeRestricted?: boolean;
 };
 
@@ -95,6 +96,9 @@ export function RetailTerminal({
       isVatable: p.isVatable,
       categoryId: p.categoryId ?? undefined,
       isAgeRestricted: p.isAgeRestricted,
+      // The count travels with the line so the cart's "+" stops at it too.
+      maxProducible: p.maxProducible,
+      canOversell:   p.canOversell,
     };
     addItem(cartProduct);
     setScan('');

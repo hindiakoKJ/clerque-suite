@@ -64,13 +64,16 @@ export default function DeliveryReceiptsPage() {
     enabled:  !!user && isPharmacy,
   });
 
+  // Declared before the early returns below: hooks must run in the same
+  // order every render, and a return that skips them once the layout
+  // arrives makes React throw and the page never shows.
+  const [showCreate, setShowCreate] = useState(false);
+  const [openReceipt, setOpenReceipt] = useState<Receipt | null>(null);
+
   // While layout is loading, render a thin skeleton instead of nothing —
   // avoids a flash if the user is legitimately on a pharmacy tenant.
   if (!layout) return <div className="p-6 text-sm text-muted-foreground">Loading…</div>;
   if (!isPharmacy) return null;
-
-  const [showCreate, setShowCreate] = useState(false);
-  const [openReceipt, setOpenReceipt] = useState<Receipt | null>(null);
 
   return (
     <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-5">

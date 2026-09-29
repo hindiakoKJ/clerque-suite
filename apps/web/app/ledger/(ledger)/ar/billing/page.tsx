@@ -149,6 +149,8 @@ interface AgingResponse {
 
 const WRITE_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'AR_ACCOUNTANT'];
 const VOID_ROLES  = ['BUSINESS_OWNER', 'ACCOUNTANT'];
+// Who may download the invoice PDF — mirrors GET /ar/invoices/:id/pdf on the API.
+const EXPORT_ROLES = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'ACCOUNTANT', 'BOOKKEEPER', 'AR_ACCOUNTANT', 'FINANCE_LEAD'];
 
 const INPUT_CLS =
   'h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground ' +
@@ -380,13 +382,14 @@ function CreateInvoiceModal({
 // ── Detail Drawer ────────────────────────────────────────────────────────────
 
 function DetailDrawer({
-  invoice, onClose, onChanged, canWrite, canVoid,
+  invoice, onClose, onChanged, canWrite, canVoid, canExport,
 }: {
   invoice:   ARInvoice;
   onClose:   () => void;
   onChanged: () => void;
   canWrite:  boolean;
   canVoid:   boolean;
+  canExport: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [showPay, setShowPay] = useState(false);
@@ -504,6 +507,14 @@ function DetailDrawer({
           </div>
 
           <div className="flex flex-wrap gap-2 pt-3 border-t border-border">
+            {/* The invoice page holds Download PDF and Email to Customer; nothing
+                else linked to it, so an issued invoice could not be sent out. */}
+            {canExport && (
+              <Link href={`/ledger/ar/invoices/${invoice.id}`}
+                className="h-9 px-3 rounded-lg border border-border text-sm flex items-center gap-1.5 hover:bg-muted">
+                <FileText className="w-4 h-4" /> PDF / Email
+              </Link>
+            )}
             {invoice.status === 'DRAFT' && canWrite && (
               <>
                 <button disabled={busy} onClick={() => action('Posted', async () => {
@@ -655,8 +666,9 @@ export default function ARBillingPage() {
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<ARInvoice | null>(null);
 
-  const canWrite = user ? WRITE_ROLES.includes(user.role) : false;
-  const canVoid  = user ? VOID_ROLES.includes(user.role)  : false;
+  const canWrite  = user ? WRITE_ROLES.includes(user.role)  : false;
+  const canVoid   = user ? VOID_ROLES.includes(user.role)   : false;
+  const canExport = user ? EXPORT_ROLES.includes(user.role) : false;
 
   const params = new URLSearchParams();
   if (statusFilter) params.set('status', statusFilter);
@@ -835,6 +847,7 @@ export default function ARBillingPage() {
           onChanged={refresh}
           canWrite={canWrite}
           canVoid={canVoid}
+          canExport={canExport}
         />
       )}
     </div>

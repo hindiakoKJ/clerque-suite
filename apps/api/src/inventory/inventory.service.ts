@@ -13,6 +13,7 @@ import { resolveBuyUnit } from './unit-conversion';
 import { idsInARecipe } from './recipe-use';
 import { blendCost, stockValuedEvent } from './zero-cost-blend';
 import { heldUsage, heldAt, availableQty } from '../orders/held-usage';
+import { learnedLevels } from './learned-levels';
 import { PH_TIMEZONE } from '@repo/shared-types';
 
 import { judgeMargin } from '@repo/shared-types';
@@ -458,7 +459,7 @@ export class InventoryService {
    * on is "8 short".
    */
   async getLowStock(tenantId: string, branchId: string) {
-    const [products, ingredients, held] = await Promise.all([
+    const [products, ingredients, held, learned, inRecipe] = await Promise.all([
       this.prisma.inventoryItem.findMany({
         where:  { tenantId, branchId },
         select: {
@@ -508,6 +509,14 @@ export class InventoryService {
         until the tickets cleared and the shelf was suddenly short.
       */
       heldUsage(this.prisma, tenantId, [branchId]),
+      /*
+        The level each ingredient gets from this shop's own use when nobody
+        typed one (learned-levels.ts), and which ingredients a live recipe
+        uses: an ingredient that is OUT and in a recipe is low whatever its
+        level, because the till is already refusing what needs it.
+      */
+      learnedLevels(this.prisma, tenantId, branchId),
+      idsInARecipe(this.prisma, tenantId),
     ]);
 
     const low = [
@@ -530,12 +539,24 @@ export class InventoryService {
       ...ingredients
         .map((r) => {
           const heldQty = heldAt(held, branchId, r.id);
+          const isPrep  = r.subRecipeItems.length > 0;
+          /*
+            The line it is judged against: the level typed by hand when there is
+            one, else what the shop's own last two weeks say (never for a prep:
+            its par is the kitchen's call). `levelSource` says which, so a screen
+            can tell a learned level from one somebody chose.
+          */
+          const typed   = r.lowStockAlert != null ? Number(r.lowStockAlert) : null;
+          const learnt  = typed == null && !isPrep ? (learned.get(r.id) ?? null) : null;
+          const level   = typed ?? learnt;
+          const levelSource = (typed != null ? 'set' : learnt != null ? 'learned' : 'none') as 'set' | 'learned' | 'none';
           // What is left once the waiting tickets have what they need: the
           // figure a buying decision has to be made on.
-          return { ...r, heldQty, onHand: availableQty(Number(r.inventory[0]?.quantity ?? 0), heldQty) };
+          return { ...r, heldQty, isPrep, level, levelSource, onHand: availableQty(Number(r.inventory[0]?.quantity ?? 0), heldQty) };
         })
-        .filter((r) => r.lowStockAlert != null
-                    && r.onHand <= Number(r.lowStockAlert))
+        .filter((r) => (r.level != null && r.onHand <= r.level)
+                    // No level at all, but out and needed by a recipe: as low as it gets.
+                    || (r.level == null && !r.isPrep && r.onHand <= 0 && inRecipe.has(r.id)))
         .map((r) => ({
           // A prep is short of being MADE, not short of being bought. Kept in
           // the same list so nothing is hidden, tagged so the caller can route
@@ -553,8 +574,9 @@ export class InventoryService {
           */
           quantity:      r.onHand,
           heldQty:       r.heldQty,
-          lowStockAlert: Number(r.lowStockAlert),
-          shortBy:       Number(r.lowStockAlert) - r.onHand,
+          lowStockAlert: r.level ?? 0,
+          levelSource:   r.levelSource,
+          shortBy:       (r.level ?? 0) - r.onHand,
           isLowStock:    true,
         })),
     ];

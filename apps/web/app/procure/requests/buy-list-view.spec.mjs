@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import {
   chipsInOrder, listToOpen, recordsOn, showsRecordBoxes, startsTicked, startsTickedAsWalkIn,
   fillInWords, stillNeeds, lastPricedLines, priceCheck, firstWithoutPrice, viewWanted,
+  pastLists, pastListDay, pastListMatches,
 } from './buy-list-view.ts';
 
 const page = readFileSync(new URL('./page.tsx', import.meta.url), 'utf8');
@@ -34,6 +35,59 @@ test('still-open lists (open, sent, bought) come first, newest first; finished a
 test('with nothing past eight the chips are the same lists as before', () => {
   const all = list(['OPEN', 'RECEIVED', 'SENT']);
   assert.deepEqual(new Set(chipsInOrder(all)), new Set(all));
+});
+
+// ── past lists ──────────────────────────────────────────────────────────────
+
+const finished = (id, status, createdAt) => ({ id, status, createdAt, requestNumber: id, lines: [] });
+
+test('past lists: only finished ones, from both sources, never twice, newest first', () => {
+  // The screen's own list: the newest hundred of everything.
+  const all = [
+    finished('open', 'OPEN', '2026-09-20T01:00:00.000Z'),
+    finished('r3', 'RECEIVED', '2026-09-18T01:00:00.000Z'),
+    finished('sent', 'SENT', '2026-09-17T01:00:00.000Z'),
+    finished('c1', 'CANCELLED', '2026-09-10T01:00:00.000Z'),
+  ];
+  // What was fetched by status: overlaps, plus a list older than the newest hundred.
+  const fetched = [
+    finished('r3', 'RECEIVED', '2026-09-18T01:00:00.000Z'),
+    finished('r1', 'RECEIVED', '2026-06-01T01:00:00.000Z'),
+    finished('c1', 'CANCELLED', '2026-09-10T01:00:00.000Z'),
+  ];
+  assert.deepEqual(pastLists(all, fetched).map((r) => r.id), ['r3', 'c1', 'r1']);
+  // Before the fetch, what the screen already holds.
+  assert.deepEqual(pastLists(all, []).map((r) => r.id), ['r3', 'c1']);
+  assert.deepEqual(pastLists([], []), []);
+});
+
+test('a finished list is remembered by the day it went into stock, else bought, sent or started', () => {
+  assert.equal(pastListDay({ receivedAt: 'a', boughtAt: 'b', sentAt: 'c', createdAt: 'd' }), 'a');
+  assert.equal(pastListDay({ receivedAt: null, boughtAt: 'b', sentAt: 'c', createdAt: 'd' }), 'b');
+  assert.equal(pastListDay({ receivedAt: null, boughtAt: null, sentAt: null, createdAt: 'd' }), 'd');
+  assert.equal(pastListDay({}), null);
+});
+
+test('finding a past list: by its number, the day shown, or an item on it; blank finds all', () => {
+  const r = { requestNumber: 'REQ-20260902-001', lines: [{ rawMaterial: { name: 'Fresh Milk' } }] };
+  assert.equal(pastListMatches(r, '2 Sept 2026', ''), true);
+  assert.equal(pastListMatches(r, '2 Sept 2026', '  '), true);
+  assert.equal(pastListMatches(r, '2 Sept 2026', '0902'), true);
+  assert.equal(pastListMatches(r, '2 Sept 2026', 'sept'), true);
+  assert.equal(pastListMatches(r, '2 Sept 2026', 'milk'), true);
+  assert.equal(pastListMatches(r, '2 Sept 2026', 'sugar'), false);
+});
+
+test('the page: Past lists fetches by status only when opened, and can show a list older than the newest hundred', () => {
+  assert.match(page, /queryKey: \['procure-requests', branchId, 'past'\]/);
+  assert.match(page, /\(\['RECEIVED', 'CANCELLED'\] as const\)\.map\(\(status\) =>\s+api\.get\('\/procure\/requests', \{ params: \{ branchId, status \} \}\)/);
+  assert.match(page, /enabled:\s+!!user && showPast,/);
+  assert.match(page, /const past = pastLists\(all, pastFetched\);/);
+  assert.match(page, /all\.find\(\(r\) => r\.id === viewing\) \?\? pastFetched\.find\(\(r\) => r\.id === viewing\)/);
+  assert.match(page, /pastListMatches\(r, dayText\(r\), pastSearch\)/);
+  assert.match(page, />\s*Past lists\s*<\/button>/);
+  // Spent shows only on a list that reached stock, and never when the shop hides costs from this viewer.
+  assert.match(page, /\{r\.status === 'RECEIVED' && !r\.costsHidden && \(/);
 });
 
 test('a recorded line starts ticked on a normal bought list, unticked on an order on the way', () => {

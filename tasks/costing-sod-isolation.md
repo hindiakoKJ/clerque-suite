@@ -115,7 +115,7 @@ already enforces every separation that IS achievable, via `@Roles` and the
 supervisor-PIN checks.** The correct go-live list is a few small fixes and
 *zero new controls*.
 
-- [ ] **Delete or relabel the SOD tile on the Ledger dashboard.** It is the
+- [x] **Delete or relabel the SOD tile on the Ledger dashboard.** It is the _(fixed 2026-09-28)_
       single most dangerous artifact in the suite: a permanently-green control
       tile that reports clean because it is **not wired**, not because the shop
       is clean. `User.sodOverrides` is written and read nowhere, and the
@@ -154,7 +154,7 @@ unauthenticated endpoint, the other an ordering bug.
 - [ ] **Cheaper control worth having instead:** a test or lint that fails any
       Prisma query on a tenant-scoped model with no tenant filter. Catches the
       class continuously, costs days not weeks.
-- [ ] Branch scoping: check every place a `branchId` comes from the request
+- [x] Branch scoping: check every place a `branchId` comes from the request _(verified already fixed, 2026-09-28)_
       rather than the JWT.
 
 **Fixed already** (commit 2d3cc9f): the unauthenticated `_diagnostics`

@@ -21,6 +21,7 @@ import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { db } from '@/lib/pos/db';
 import { computeVat } from '@/lib/pos/utils';
+import { afterOfflineSale } from '@/lib/pos/stock-ceiling';
 import { dispatchOrderToStations, toastDispatchSummary } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { RetailTerminal } from './RetailTerminal';
@@ -156,9 +157,19 @@ export default function PosTerminal() {
         toast.error(`No product matches barcode ${code}`);
         return;
       }
-      addItem(
-        { id: match.id, name: match.name, price: match.price, costPrice: match.costPrice, isVatable: match.isVatable, categoryId: match.categoryId },
-      );
+      const stock = match as CachedProduct & {
+        maxProducible?: number | null;
+        limitedBy?: { name: string } | null;
+        canOversell?: boolean;
+      };
+      const added = addItem({
+        id: match.id, name: match.name, price: match.price, costPrice: match.costPrice, isVatable: match.isVatable, categoryId: match.categoryId,
+        maxProducible: stock.maxProducible,
+        limitedByName: stock.limitedBy?.name,
+        canOversell:   stock.canOversell,
+      });
+      // The store has already said why when it refused.
+      if (!added) { playSound('error'); return; }
       playSound('click');
       toast.success(`Added: ${match.name}`);
     },
@@ -367,6 +378,27 @@ export default function PosTerminal() {
         retries: 0,
         status: 'PENDING',
       });
+      // The tile kept the last number the server sent until the connection
+      // was back — thirty offline drinks left "12 left" on every tile. Take
+      // what this sale used off the cached count, in memory (so the grid
+      // changes now) and in Dexie (so a reload while still offline agrees).
+      // The server's own count replaces it on the next online refetch; until
+      // the queued orders have synced that count runs high, which the 15s
+      // poll then corrects.
+      try {
+        const sold = new Map<string, number>();
+        for (const l of lines) sold.set(l.product.id, (sold.get(l.product.id) ?? 0) + l.quantity);
+        const key = ['products-pos', activeBranchId];
+        const current =
+          queryClient.getQueryData<CachedProduct[]>(key) ??
+          (await db.products.where('branchId').equals(activeBranchId).toArray());
+        const next = afterOfflineSale(current, sold);
+        queryClient.setQueryData(key, next);
+        await db.products.bulkPut(next.filter((p, i) => p !== current[i]));
+      } catch (e) {
+        // A stale tile is better than a lost sale: the order is already queued.
+        console.warn('Could not adjust cached stock after an offline sale:', e);
+      }
       setShowPayment(false);
       setMobileCartOpen(false);
       setReceiptData({ ...receiptBase, orderNumber: `LOCAL-${clientUuid.slice(0, 8).toUpperCase()}`, isOffline: true });

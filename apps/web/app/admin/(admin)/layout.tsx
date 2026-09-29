@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect } from 'react';
-import { ShieldCheck, LayoutDashboard, Building2, AlertCircle, User, Receipt } from 'lucide-react';
+import { ShieldCheck, LayoutDashboard, Building2, AlertCircle, User, Receipt, Banknote } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
@@ -47,6 +47,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     { href: '/admin/dashboard', label: 'Dashboard',     icon: LayoutDashboard },
     { href: '/admin/tenants',   label: 'Tenants',       icon: Building2 },
     { href: '/admin/billing',   label: 'Billing',       icon: Receipt },
+    { href: '/admin/payments-pending', label: 'Payments', icon: Banknote },
     { href: '/admin/events',    label: 'Failed Events', icon: AlertCircle },
     { href: '/admin/audit',     label: 'Audit Log',     icon: User },
   ];

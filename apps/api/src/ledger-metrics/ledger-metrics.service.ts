@@ -59,7 +59,10 @@ export interface ProcessMetrics {
   };
   control: {
     pendingExpenseClaims:    number;
-    sodOverridesLast30d:     number;
+    // No sodOverridesLast30d: nothing ever writes an SOD_OVERRIDE_GRANTED
+    // audit row (the permission editor's warning lives in the browser), so
+    // the count was a permanent 0 that read as a clean control. Dropped from
+    // the dashboard and the KPI export rather than shipped as false assurance.
     productsMissingCost:     number;
     /** Audit log entries created in the last 24h (high count = unusual activity). */
     auditEntriesLast24h:     number;
@@ -87,7 +90,7 @@ export class LedgerMetricsService {
       tbLines, voidedOrders30d, totalOrders30d, reopens90d,
       jesToday, jesThisMonth,
       openAr, openAp,
-      pendingClaims, sodOverrides, missingCost, auditCount, offlineSyncs,
+      pendingClaims, missingCost, auditCount, offlineSyncs,
     ] = await Promise.all([
       // ── Timeliness ──────────────────────────────────────────────────────
       this.prisma.accountingEvent.findMany({
@@ -140,9 +143,6 @@ export class LedgerMetricsService {
 
       // ── Control ─────────────────────────────────────────────────────────
       this.prisma.expenseClaim.count({ where: { tenantId, status: 'SUBMITTED' } }).catch(() => 0),
-      this.prisma.auditLog.count({
-        where: { tenantId, action: 'SOD_OVERRIDE_GRANTED' as any, createdAt: { gte: month30 } },
-      }).catch(() => 0),
       // Same rule as the POS dashboard list (products/missing-cost.ts): no
       // cost price, or costed by a recipe that uses an ingredient at ₱0 or blank.
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { inventoryMode: true } })
@@ -244,7 +244,6 @@ export class LedgerMetricsService {
       },
       control: {
         pendingExpenseClaims: pendingClaims,
-        sodOverridesLast30d:  sodOverrides,
         productsMissingCost:  missingCost,
         auditEntriesLast24h:  auditCount,
         offlineSyncsLast24h:  offlineSyncs,

@@ -14,7 +14,7 @@
 export interface RecipeLine {
   rawMaterialId: string;
   quantity:      unknown;
-  rawMaterial?:  { name: string; unit: string } | null;
+  rawMaterial?:  { name: string; unit: string; lowStockAlert?: unknown } | null;
 }
 
 export type LimitedBy = {
@@ -23,6 +23,12 @@ export type LimitedBy = {
   unit:          string;
   stock:         number;
   perUnit:       number;
+  /**
+   * The ingredient's own reorder point, in its unit, when the owner set one.
+   * Left off otherwise, so a limit with no reorder level reads exactly as
+   * before. The till's LOW badge follows this rather than a count of cups.
+   */
+  reorderLevel?: number;
 } | null;
 
 /**
@@ -49,12 +55,14 @@ export function ceilingOf(bom: RecipeLine[], stockOf: (rawMaterialId: string) =>
     const producible = servingsOf(stock, perUnit);
     if (producible < min) {
       min = producible;
+      const alert = line.rawMaterial?.lowStockAlert;
       limit = {
         rawMaterialId: line.rawMaterialId,
         name:          line.rawMaterial?.name ?? 'Unknown ingredient',
         unit:          line.rawMaterial?.unit ?? '',
         stock,
         perUnit,
+        ...(alert != null && Number.isFinite(Number(alert)) ? { reorderLevel: Number(alert) } : {}),
       };
     }
   }

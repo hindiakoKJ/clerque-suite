@@ -26,13 +26,16 @@ import {
 export class PriceListsController {
   constructor(private priceLists: PriceListsService) {}
 
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  // Ledger roles read the list too: the AR Customers screen assigns a price
+  // list to a customer, and a 403 there showed "Default pricing" for a customer
+  // who has one. Writes stay with the till (BRANCH_MANAGER / BUSINESS_OWNER).
+  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD')
   @Get()
   list(@CurrentUser() user: JwtPayload) {
     return this.priceLists.list(user.tenantId!);
   }
 
-  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER')
+  @Roles('CASHIER', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'ACCOUNTANT', 'AR_ACCOUNTANT', 'BOOKKEEPER', 'FINANCE_LEAD')
   @Get(':id')
   getOne(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.priceLists.getOne(user.tenantId!, id);

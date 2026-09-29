@@ -16,6 +16,7 @@ import { DEFAULT_APP_ACCESS, DEFAULT_PLAN_CODE } from '@repo/shared-types';
 import { DEMO_SCENARIOS, ScenarioKey, allProducts } from './demo-scenarios';
 import { COFFEE_SHOP_INGREDIENTS } from './coffee-shop-ingredients';
 import { COFFEE_SHOP_CATEGORIES } from './coffee-shop-categories';
+import { copyShopSetup } from './copy-setup';
 import { AccountsService } from '../accounting/accounts.service';
 import { MailService } from '../mail/mail.service';
 import { MAX_FAILED_ATTEMPTS, lockoutClearedRow, recentFailedLogins } from '../auth/lockout';
@@ -1647,6 +1648,37 @@ export class AdminService {
    * stationId on existing categories WILL be updated if it's currently null
    * (so re-running fixes any unrouted categories).
    */
+  /**
+   * Start a new shop from another shop's setup: menu, recipes, ingredients,
+   * preps, stations and running settings, and nothing that happened in it.
+   * Only into an empty shop. See copy-setup.ts for exactly what moves.
+   */
+  async copySetup(toTenantId: string, fromSlug: string, actor: ConsoleActor) {
+    const code = String(fromSlug ?? '').toLowerCase().trim();
+    if (!code) throw new BadRequestException('Type the company code of the shop to copy from.');
+    const [from, to] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { slug: code }, select: { id: true, slug: true } }),
+      this.prisma.tenant.findUnique({ where: { id: toTenantId }, select: { id: true, slug: true } }),
+    ]);
+    if (!from) throw new NotFoundException(`No shop has the company code "${code}".`);
+    if (!to) throw new NotFoundException('Tenant not found.');
+    const result = await this.prisma.$transaction(
+      (tx) => copyShopSetup(tx, from.id, to.id),
+      // A whole menu in one go: hundreds of rows, still seconds, but well past the 5 s default.
+      { timeout: 120_000, maxWait: 10_000 },
+    );
+    this.logger.log(`Copied setup from ${from.slug} to ${to.slug}: ${JSON.stringify(result.copied)} by ${actor.email}`);
+    await this.logAction({
+      actor,
+      tenantId:   to.id,
+      tenantSlug: to.slug,
+      // No enum value of its own (that would be a migration); the detail says what it was.
+      action:     'PROFILE_UPDATED',
+      detail:     { kind: 'SETUP_COPIED', fromSlug: from.slug, ...result.copied },
+    });
+    return { fromSlug: from.slug, toSlug: to.slug, ...result };
+  }
+
   async seedCoffeeShopCategories(tenantId: string, actor: ConsoleActor) {
     const tenant = await this.prisma.tenant.findUnique({
       where:  { id: tenantId },

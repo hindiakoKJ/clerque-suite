@@ -961,6 +961,54 @@ export default function TenantDetailPage({ params }: { params: Promise<{ id: str
             </button>
           </div>
 
+          {/* Start from another shop's setup */}
+          <div className="rounded-lg border border-emerald-200/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4">
+            <div className="flex items-center gap-1.5 mb-1">
+              <Copy className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
+              <h2 className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
+                Copy setup from another shop
+              </h2>
+            </div>
+            <p className="text-[11px] text-muted-foreground mb-3">
+              Fill this new shop with another shop&apos;s menu, prices, recipes, ingredients and costs,
+              reorder levels, preps, stations and settings. Sales, stock counts, staff and customers are
+              not copied. Works only on a shop that has no menu yet.
+            </p>
+            <button
+              onClick={async () => {
+                const fromSlug = (window.prompt('Company code of the shop to copy from (for example cafe-carolina):') ?? '').trim();
+                if (!fromSlug) return;
+                if (!confirm(`Copy the whole setup of "${fromSlug}" into ${tenant.slug}? This cannot be undone.`)) return;
+                try {
+                  setBusy(true);
+                  const { data } = await api.post<{ fromSlug: string; copied: Record<string, number> }>(
+                    `/admin/tenants/${tenant.id}/copy-setup`, { fromSlug },
+                  );
+                  const c = data.copied;
+                  toast.success(
+                    `Copied from ${data.fromSlug}: ${c.products ?? 0} products, ${c.ingredients ?? 0} ingredients, `
+                    + `${c.recipeLines ?? 0} recipe lines, ${c.prepRecipeLines ?? 0} prep lines, ${c.categories ?? 0} categories, `
+                    + `${c.stations ?? 0} stations.`,
+                    { duration: 10_000 },
+                  );
+                  qc.invalidateQueries({ queryKey: ['tenant-detail', tenant.id] });
+                } catch (err: unknown) {
+                  toast.error(
+                    (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+                    ?? 'Could not copy the setup.',
+                  );
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              disabled={busy}
+              className="w-full flex items-center justify-center gap-1.5 h-8 px-3 rounded-md text-xs font-medium border border-emerald-300/60 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition disabled:opacity-50"
+            >
+              <Copy className="w-3 h-3" />
+              Copy setup…
+            </button>
+          </div>
+
           {/* Seed Coffee Shop Ingredients */}
           <div className="rounded-lg border border-amber-200/60 bg-amber-50/40 dark:bg-amber-950/20 p-4">
             <div className="flex items-center gap-1.5 mb-1">

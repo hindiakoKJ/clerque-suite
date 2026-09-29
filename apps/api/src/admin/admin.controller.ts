@@ -239,6 +239,21 @@ export class AdminController {
    * food, Pastry Pass gets pre-made bakery, Counter handles retail.
    * Idempotent: re-runs only fix unrouted categories.
    */
+  /**
+   * Start this (empty) shop from another shop's setup, by that shop's
+   * company code: menu, recipes, ingredients, preps, stations and running
+   * settings. Nothing that happened in the other shop is copied.
+   */
+  @Post('tenants/:id/copy-setup')
+  @HttpCode(HttpStatus.OK)
+  copySetup(
+    @Request() req: { user: JwtPayload },
+    @Param('id') id: string,
+    @Body() body: { fromSlug?: string },
+  ) {
+    return this.svc.copySetup(id, body.fromSlug ?? '', actor(req));
+  }
+
   @Post('tenants/:id/seed-coffee-shop-categories')
   @HttpCode(HttpStatus.OK)
   seedCoffeeShopCategories(

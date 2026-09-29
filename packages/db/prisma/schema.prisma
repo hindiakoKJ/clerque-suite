@@ -1146,6 +1146,11 @@ model UserSession {
   id                String        @id @default(cuid())
   userId            String
   refreshTokenHash  String        @unique
+  /// SHA-256 of the refresh token: an exact, indexed lookup, so refresh and
+  /// logout find THEIR session and a replayed token is told from a fresh one.
+  /// Null on sessions the build before 2026-09-28 created; those are matched
+  /// by the bcrypt hash until they expire (seven days).
+  refreshTokenSha   String?       @unique
   deviceInfo        String?
   deviceFingerprint String?
   ipAddress         String?

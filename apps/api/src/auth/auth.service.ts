@@ -35,6 +35,18 @@ const ACCESS_EXPIRY = '8h';
 const REFRESH_EXPIRY = '7d';
 const REFRESH_DAYS = 7;
 
+/** The refresh token as stored: a SHA-256 digest, exact and indexed. */
+export function refreshTokenSha(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * A rotated refresh token presented again within this window is the two-tab
+ * race (both tabs read the old token before one wrote the new one), not a
+ * copied token. It is refused, and nothing else happens.
+ */
+const REUSE_GRACE_MS = 60_000;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -806,6 +818,15 @@ export class AuthService {
       payload.planFeatures = { ...payload.planFeatures, advancedAccounting: false };
     }
 
+    /*
+      The session is named before the token is signed, so the access token
+      carries it (`sid`) and JwtStrategy can check on every request that the
+      session is still ACTIVE. "Sign out everywhere", a password change and
+      the Console's tenant-wide revoke then bite at the next request, instead
+      of when the next refresh comes round up to eight hours later.
+    */
+    const sessionId = randomBytes(16).toString('hex');
+    payload.sid = sessionId;
     const accessToken = this.jwt.sign(payload, { expiresIn: ACCESS_EXPIRY });
     const refreshToken = this.jwt.sign(
       { sub: userId, type: 'refresh' },
@@ -815,14 +836,26 @@ export class AuthService {
       },
     );
 
+    /*
+      The refresh token is stored as a SHA-256 digest: an exact, indexed
+      lookup, so refresh and logout find THEIR session rather than the first
+      bcrypt match in a loop over every session, and a copied token can be
+      told from a fresh one. bcrypt bought nothing here -- a signed 256-bit
+      token is not guessable -- and its loose loop is what let "sign out"
+      revoke the wrong device. The bcrypt column is still written so the
+      sessions the previous build left behind keep working until they expire;
+      it can be dropped after that week.
+    */
     const refreshHash = await bcrypt.hash(refreshToken, 10);
     // Match REFRESH_EXPIRY so the DB record and the JWT expire together.
     const expiresAt = new Date(Date.now() + REFRESH_DAYS * 24 * 60 * 60 * 1000);
 
     await this.prisma.userSession.create({
       data: {
+        id: sessionId,
         userId,
         refreshTokenHash: refreshHash,
+        refreshTokenSha:  refreshTokenSha(refreshToken),
         deviceInfo,
         ipAddress,
         status: 'ACTIVE',
@@ -844,20 +877,54 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  async refresh(userId: string, rawRefreshToken: string): Promise<AuthTokens> {
-    const sessions = await this.prisma.userSession.findMany({
-      where: { userId, status: 'ACTIVE' },
+  /**
+   * The session a refresh token belongs to, by its digest.
+   *
+   * Exact first. A digest that matches a session no longer ACTIVE is a token
+   * presented after it was rotated away: within a minute of the rotation
+   * that is two tabs racing (both read the old token before one wrote the
+   * new one) and it is simply refused; later than that it is a copied token
+   * being replayed, and every session of that user is revoked -- the one
+   * signal a stolen token gives, which used to be answered with a silent
+   * 401. A session with no digest predates this build and is matched by
+   * its bcrypt hash until it expires.
+   */
+  private async sessionForToken(
+    userId: string,
+    token: string,
+    onReuse: 'revoke-all' | 'ignore',
+  ): Promise<{ id: string; expiresAt: Date } | null> {
+    const exact = await this.prisma.userSession.findUnique({
+      where:  { refreshTokenSha: refreshTokenSha(token) },
+      select: { id: true, userId: true, status: true, expiresAt: true, lastUsedAt: true },
     });
-
-    let matchedSession: (typeof sessions)[0] | null = null;
-    for (const session of sessions) {
-      const match = await bcrypt.compare(rawRefreshToken, session.refreshTokenHash);
-      if (match) {
-        matchedSession = session;
-        break;
+    if (exact) {
+      if (exact.userId !== userId) return null;
+      if (exact.status === 'ACTIVE') return { id: exact.id, expiresAt: exact.expiresAt };
+      if (onReuse === 'revoke-all' && exact.status === 'REVOKED') {
+        const sinceRotation = Date.now() - exact.lastUsedAt.getTime();
+        if (sinceRotation > REUSE_GRACE_MS) {
+          await this.prisma.userSession.updateMany({
+            where: { userId, status: 'ACTIVE' },
+            data:  { status: 'REVOKED' },
+          });
+          throw new UnauthorizedException('This sign-in was used from another device and has been closed everywhere. Sign in again.');
+        }
       }
+      return null;
     }
+    const legacy = await this.prisma.userSession.findMany({
+      where:  { userId, status: 'ACTIVE', refreshTokenSha: null },
+      select: { id: true, refreshTokenHash: true, expiresAt: true },
+    });
+    for (const session of legacy) {
+      if (await bcrypt.compare(token, session.refreshTokenHash)) return { id: session.id, expiresAt: session.expiresAt };
+    }
+    return null;
+  }
 
+  async refresh(userId: string, rawRefreshToken: string): Promise<AuthTokens> {
+    const matchedSession = await this.sessionForToken(userId, rawRefreshToken, 'revoke-all');
     if (!matchedSession) throw new UnauthorizedException('Invalid refresh token');
     if (matchedSession.expiresAt < new Date()) {
       await this.prisma.userSession.update({
@@ -875,9 +942,10 @@ export class AuthService {
 
     // Rotate: revoke ONLY the matched session, then issue new tokens. Other
     // active sessions (e.g. user logged in on a second device) stay alive.
+    // lastUsedAt records the rotation, for the reuse grace window above.
     await this.prisma.userSession.update({
       where: { id: matchedSession.id },
-      data: { status: 'REVOKED' },
+      data: { status: 'REVOKED', lastUsedAt: new Date() },
     });
 
     return this.login(
@@ -887,20 +955,13 @@ export class AuthService {
   }
 
   async logout(userId: string, refreshToken: string): Promise<void> {
-    const sessions = await this.prisma.userSession.findMany({
-      where: { userId, status: 'ACTIVE' },
+    // Exactly this device's session, never "the first one that matched".
+    const session = await this.sessionForToken(userId, refreshToken, 'ignore');
+    if (!session) return;
+    await this.prisma.userSession.update({
+      where: { id: session.id },
+      data: { status: 'REVOKED' },
     });
-
-    for (const session of sessions) {
-      const match = await bcrypt.compare(refreshToken, session.refreshTokenHash);
-      if (match) {
-        await this.prisma.userSession.update({
-          where: { id: session.id },
-          data: { status: 'REVOKED' },
-        });
-        return;
-      }
-    }
   }
 
   async logoutAllDevices(userId: string): Promise<void> {

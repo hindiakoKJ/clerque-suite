@@ -534,16 +534,28 @@ function buildOwner() {
   m.p('Spoiled milk or a dropped bottle: "Write off" on the same row, with the amount and the reason. A whole supermarket receipt can go in at once at Procure, then "Upload a receipt" — the ingredients go into stock, the rest into the books, and the photo is filed beside it.');
   m.tip('Receiving at a new price updates the average cost, and every recipe that uses that ingredient follows on its own. You never have to edit a drink because the supplier put prices up.');
 
-  m.h2('1.7  The day\'s Z-read');
+  m.h2('1.7  Photograph the receipt and let Clerque read it');
+  m.p('Procure, then "Upload a receipt". Photograph the whole receipt, flat and in good light — a long one in two or three overlapping strips — and press "Read the receipt". Every printed line comes back with what was bought, how many, and the price.');
+  m.steps([
+    'The first time a shelf appears: on each line, pick which ingredient it is under "Which ingredient is this?" (or create it), and fill in "One holds" — how much of the ingredient one pack is, in the unit you count it in. A size printed on the item, like 1KG or 250ML, is filled in for you.',
+    'A line that is not stock — the delivery fee, parking — press "Not stock — an expense". A line that should not be recorded at all: "Skip".',
+    'Read the box above "Post to stock". It says what still has to be fixed, and whether the paper adds up: the receipt\'s own item count against what was read, and the lines against the printed total.',
+    'Press "Post to stock". The goods go on the shelf, the fees into the books, and the photo is filed with the purchase.',
+  ]);
+  m.tip('Clerque remembers. Once a line has been tagged and posted, the next receipt from that shelf comes back already tagged and marked "remembered", pack size included — by the product barcode, so a supermarket\'s abbreviation ("ANGELINA NO SUGAR AD") never has to be worked out twice. To correct a memory, pick the right ingredient and post.');
+  m.careful('"Everything on the receipt is accounted for" means every line has a home and the paper adds up. It does not check that a price is right: read the numbers against the receipt on any line marked "check the reading".');
+  m.note('Reads are limited to 50 a day per shop. Typing the lines in by hand posts the same way.');
+
+  m.h2('1.8  The day\'s Z-read');
   m.p('The cashier counts the drawer at "Close Shift" and the screen says balanced, over or short. Pressing it again shows the Z-read, which prints.');
   m.p('To look at past days: Ledger, then "Reports", then "Z-Read History", choose the dates, and export.');
   m.careful('Check the digital breakdown against the shop\'s GCash and Maya the same day. A difference found today is findable; the same difference next week is not. And if nobody closes the last shift, Clerque writes the day\'s Z-read itself, so no day is ever left without one.');
 
-  m.h2('1.8  Money that left the drawer during the day');
+  m.h2('1.9  Money that left the drawer during the day');
   m.p('A cashier can record money spent from the till, or notes moved to the safe, with "Cash Out". Both lower what the drawer is expected to hold, so the closing count still balances. A move to the safe always names an approving manager, and so does anything spent over ₱500 — so expect to be asked in person before it is recorded. There is no undo on the till, so if a cashier tells you a wrong amount went in, sort it before the count.');
   m.stop('Ingredients must never be paid for out of the drawer. That kind of entry never adds stock, so the shop keeps selling drinks it no longer has. Buy from "Shop cash" instead, and record it in Procure.');
 
-  m.h2('1.9  The end-of-day list of what the day used');
+  m.h2('1.10  The end-of-day list of what the day used');
   m.p('It arrives on the bell, and on the phone if Telegram is linked, when the last shift is closed — or two hours after the closing time if nobody closed it.');
   m.bullets([
     'Each ingredient, and how much of it went.',

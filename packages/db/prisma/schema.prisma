@@ -692,6 +692,7 @@ model Tenant {
   fuelPumps                  FuelPump[]
   tankDips                   TankDip[]
   rawMaterials               RawMaterial[]
+  receiptAliases             ReceiptAlias[]
   payRuns                    PayRun[]
   payslips                   Payslip[]
   documents                  Document[]
@@ -1407,6 +1408,7 @@ model RawMaterial {
   /// This item's stock saved at each branch closing (the daily sheet).
   dayBalances             StockDayBalance[]
 
+  receiptAliases          ReceiptAlias[]
   @@index([tenantId, isActive])
   @@map("raw_materials")
 }
@@ -5921,6 +5923,47 @@ model PurchaseRequestLine {
   @@index([purchaseRequestId])
   @@index([rawMaterialId])
   @@map("purchase_request_lines")
+}
+
+/// What a printed receipt line means to THIS shop, learned the first time a
+/// person tags it on the receipt screen and posts.
+///
+/// A supermarket prints "ANGELINA NO SUGAR AD 04806503950622" -- an
+/// abbreviation no name matcher can place, under a barcode that never
+/// changes. So the key is the barcode when the receipt prints one, and the
+/// printed text (normalised) when it does not; the row carries the ingredient
+/// chosen and the pack size posted, so the next receipt from that shelf needs
+/// no picking and no "one holds" question. Per shop: the same barcode is a
+/// different ingredient, in a different unit, in a different kitchen.
+model ReceiptAlias {
+  id            String   @id @default(cuid())
+  tenantId      String
+  rawMaterialId String
+  /// "bc:<barcode>" when the line printed one, else "tx:<printedKey>".
+  key           String
+  /// The barcode as printed, digits only; null when the receipt prints none.
+  barcode       String?
+  /// The printed text, normalised (lowercase, one space): the fallback lookup
+  /// when a later receipt prints the same text but the barcode was not read.
+  printedKey    String
+  /// The printed text as last seen, for the person.
+  printedText   String
+  /// How much of the ingredient's unit one printed unit holds, as last posted.
+  packSize      Decimal? @db.Decimal(12, 4)
+  brandNote     String?
+  timesUsed     Int      @default(1)
+  lastUsedAt    DateTime @default(now())
+  createdById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key])
+  @@index([tenantId, printedKey])
+  @@index([tenantId, barcode])
+  @@map("receipt_aliases")
 }
 
 enum PurchaseOrderStatus {

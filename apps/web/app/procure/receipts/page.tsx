@@ -62,6 +62,9 @@ interface Suggested {
   kind: 'ingredient' | 'supply' | 'expense';
   expenseCategory: string | null;
   confidence: number;
+  barcode?: string | null;
+  /** The shop tagged this printed line before: the match and pack size come from that. */
+  remembered?: boolean;
   match: { rawMaterialId: string; name: string; unit: string; score: number } | null;
   alternatives: Array<{ rawMaterialId: string; name: string; unit: string; score: number }>;
   pack: { packsBought: number | null; packSize: number | null; packCost: number | null; needsPackSize: boolean; note: string | null } | null;
@@ -74,7 +77,8 @@ interface ParseResult {
   vendor: string | null; dateText: string | null; dateIso: string | null;
   referenceNumber: string | null; total: number | null;
   lines: Suggested[];
-  summary: { lines: number; matched: number; unmatched: number; expenses: number; needsPack: number; linesTotal: number; footsToTotal: boolean | null };
+  itemCount?: number | null;
+  summary: { lines: number; matched: number; remembered?: number; unmatched: number; expenses: number; needsPack: number; linesTotal: number; footsToTotal: boolean | null; printedItems?: number | null; itemsRead?: number; itemsMatch?: boolean | null };
   reads?: Reads;
 }
 
@@ -115,6 +119,9 @@ interface Row {
   score: number | null;
   printedQty: number | null;
   printedUnit: string | null;
+  /** The barcode the receipt printed with this line, for the shop's memory. */
+  barcode: string | null;
+  remembered: boolean;
   fromReader: boolean;
   /** Which photo wrote this row: reading the same photo again replaces only its own rows. */
   fromPhoto: number | null;
@@ -130,6 +137,7 @@ const blankRow = (): Row => ({
   newName: '', newUnit: 'g', newCategory: 'INGREDIENT',
   packs: '1', size: '', cost: '', brand: '', amount: '', category: 'OTHER',
   acceptCostChange: false, note: null, confidence: null, score: null, printedQty: null, printedUnit: null,
+  barcode: null, remembered: false,
   fromReader: false, fromPhoto: null, fromLine: false, failedReason: null, alternatives: [],
 });
 const num0 = (v: unknown) => (v == null ? 0 : Number(v));
@@ -537,6 +545,8 @@ export default function ReceiptsPage() {
           score: m?.score ?? null,
           printedQty: l.quantity,
           printedUnit: l.unit,
+          barcode: l.barcode ?? null,
+          remembered: !!l.remembered,
           fromReader: true,
           fromPhoto: photoSeq,
           alternatives: l.alternatives,
@@ -572,13 +582,14 @@ export default function ReceiptsPage() {
             cost:  rr.cost || hit.cost,
             note: rr.note, confidence: rr.confidence, score: rr.score,
             printedQty: rr.printedQty, printedUnit: rr.printedUnit, alternatives: rr.alternatives,
+            barcode: rr.barcode, remembered: rr.remembered,
             fromReader: true, fromPhoto: photoSeq,
           };
         }
         return [...kept, ...leftover];
       });
       const s = r.summary;
-      toast.success(`Read ${s.lines} line${s.lines === 1 ? '' : 's'} — ${s.matched} matched${s.unmatched ? `, ${s.unmatched} to pick` : ''}${s.needsPack ? `, ${s.needsPack} need a pack size` : ''}.`);
+      toast.success(`Read ${s.lines} line${s.lines === 1 ? '' : 's'} — ${s.matched} matched${s.remembered ? ` (${s.remembered} remembered)` : ''}${s.unmatched ? `, ${s.unmatched} to pick` : ''}${s.needsPack ? `, ${s.needsPack} need a pack size` : ''}.`);
       if (r.discountNote) toast.message(r.discountNote, { duration: 8000 });
     },
     onError: (e: any) => {
@@ -618,6 +629,8 @@ export default function ReceiptsPage() {
         packCost:    pos(r.cost),
         ...(r.brand.trim() ? { brandNote: r.brand.trim() } : {}),
         ...(r.acceptCostChange ? { acceptCostChange: true } : {}),
+        // A line off the reader is remembered under its barcode or its printed text, with what was chosen.
+        ...(r.fromReader && r.description.trim() ? { printedText: r.description.trim(), ...(r.barcode ? { barcode: r.barcode } : {}) } : {}),
       }));
       const expenses = rows.filter((r) => r.kind === 'expense').map((r) => ({
         description: r.description.trim() || 'Expense', amount: pos(r.amount), category: r.category,
@@ -700,6 +713,34 @@ export default function ReceiptsPage() {
   const total = stockTotal + expenseTotal;
   const readTotal = reading?.total ?? null;
   const offBy = readTotal != null ? total - readTotal : null;
+
+  /*
+    Is everything on the paper accounted for? Answered in one place, in words
+    a cashier can act on, right above the Post button -- a receipt posted with
+    a line missing is stock that never arrives and a cost the books never see.
+    The blocking problems above hold the button; the checks against the paper
+    itself (its printed item count, its printed total) are warnings, because a
+    receipt that prints no count, or a fee the shop chose not to record, is
+    not a mistake -- but it is worth a look before the goods go on the shelf.
+  */
+  const checks = useMemo(() => {
+    const warnings: string[] = [];
+    const live = rows.filter((r) => r.kind !== 'skip');
+    const skipped = rows.length - live.length;
+    if (reading) {
+      const s = reading.summary;
+      if (s.printedItems != null && s.itemsRead != null && s.printedItems !== s.itemsRead) {
+        warnings.push(`The receipt prints ${s.printedItems} item${s.printedItems === 1 ? '' : 's'}; ${s.itemsRead} ${s.itemsRead === 1 ? 'was' : 'were'} read. A line may be missing or doubled — check against the paper.`);
+      }
+      if (offBy != null && Math.abs(offBy) >= 1) {
+        warnings.push(`The lines add to ${formatPeso(total)} but the receipt says ${formatPeso(readTotal ?? 0)} (${offBy > 0 ? 'over' : 'under'} by ${formatPeso(Math.abs(offBy))}).`);
+      }
+      const unsure = live.filter((r) => r.confidence != null && r.confidence < 0.7).length;
+      if (unsure > 0) warnings.push(`${unsure} line${unsure === 1 ? ' was' : 's were'} hard to read — check ${unsure === 1 ? 'its' : 'their'} numbers against the paper.`);
+    }
+    if (skipped > 0) warnings.push(`${skipped} line${skipped === 1 ? '' : 's'} skipped: ${skipped === 1 ? 'it' : 'they'} will not be recorded anywhere.`);
+    return { warnings, live: live.length, matchesPaper: readTotal != null && Math.abs(offBy ?? 0) < 1 };
+  }, [rows, reading, offBy, total, readTotal]);
 
   const update = (key: string, patch: Partial<Row>) =>
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -1036,6 +1077,9 @@ export default function ReceiptsPage() {
                         {r.confidence != null && r.confidence < 0.7 && (
                           <span title="The reader was not sure it read this line correctly" className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">check the reading</span>
                         )}
+                        {r.kind === 'stock' && r.remembered && r.rawMaterialId && (
+                          <span title="Tagged on an earlier receipt: the ingredient and pack size were filled in from it" className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">remembered</span>
+                        )}
                         {r.kind === 'stock' && !r.createNew && r.rawMaterialId && r.score != null && r.score < 0.85 && (
                           <span title="The match to an ingredient is a guess" className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">best guess — check</span>
                         )}
@@ -1194,11 +1238,34 @@ export default function ReceiptsPage() {
 
       {/* 4. post */}
       <div className="sticky bottom-4 space-y-2">
-        {problems.length > 0 && rows.length > 0 && (
-          <ul className="rounded-xl border border-border bg-card px-4 py-2 text-xs text-muted-foreground">
-            {problems.slice(0, 3).map((p) => <li key={p}>{p}</li>)}
-            {problems.length > 3 && <li>…and {problems.length - 3} more</li>}
-          </ul>
+        {rows.length > 0 && (
+          <div className={`rounded-xl border px-4 py-3 text-xs ${problems.length > 0 ? 'border-amber-500/50 bg-amber-500/5' : checks.warnings.length > 0 ? 'border-amber-500/30 bg-card' : 'border-emerald-500/40 bg-emerald-500/5'}`}>
+            {problems.length > 0 ? (
+              <>
+                <p className="flex items-center gap-2 font-semibold text-foreground">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+                  {problems.length === 1 ? 'One thing' : `${problems.length} things`} to fix before this can post
+                </p>
+                <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-muted-foreground">
+                  {problems.slice(0, 6).map((p) => <li key={p}>{p}</li>)}
+                  {problems.length > 6 && <li>…and {problems.length - 6} more</li>}
+                </ul>
+              </>
+            ) : (
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold text-foreground">
+                <PackageCheck className={`h-4 w-4 shrink-0 ${checks.warnings.length ? 'text-amber-500' : 'text-emerald-600'}`} />
+                {checks.warnings.length ? 'Ready to post — but check against the paper:' : 'Everything on the receipt is accounted for.'}
+                <span className="font-normal text-muted-foreground">
+                  {checks.live} line{checks.live === 1 ? '' : 's'}, {formatPeso(total)}{checks.matchesPaper ? ', matches the receipt' : ''}
+                </span>
+              </p>
+            )}
+            {checks.warnings.length > 0 && (
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-muted-foreground">
+                {checks.warnings.map((w) => <li key={w}>{w}</li>)}
+              </ul>
+            )}
+          </div>
         )}
         {requestId && (
           <label className="flex items-start gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-xs text-muted-foreground">

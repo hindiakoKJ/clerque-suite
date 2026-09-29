@@ -152,6 +152,22 @@ export class ReceiptStockLineDto {
   @IsOptional()
   @IsBoolean()
   acceptCostChange?: boolean;
+
+  /**
+   * The line as the receipt printed it, when this row came from the reader.
+   * With the ingredient chosen and the pack size posted, it is what the shop
+   * remembers for the next receipt from that shelf.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  printedText?: string;
+
+  /** The barcode printed with it, digits only. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  barcode?: string;
 }
 
 /** One printed line that is NOT stock: a delivery fee, a service, a repair. */

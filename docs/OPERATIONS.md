@@ -172,6 +172,17 @@ the container with `apps/api/scripts/probes/run-in-container.sh`; see
   which model ids the project can serve when Google changes them; then set
   `GEMINI_MODEL` on Railway.
 
+## 8b. Low stock with no reorder level
+
+Shops are required to type a reorder level for every ingredient. Until they
+do, `apps/api/src/inventory/learned-levels.ts` gives each ingredient with no
+typed level two days of its own average daily use over the last two weeks
+(counted over the days the shop has traded), so the buy list, Check stock and
+the 3 am alert work from the first days. A typed level always wins; a prep
+keeps its kitchen-set par. An ingredient that is out and needed by a live
+recipe is low even with no level; Check stock then asks for one pack of what
+was bought last time, or names it (`unpaced`) when nothing is on record.
+
 ## 9. The receipt reader
 
 `apps/api/src/procure/receipt-parser.ts` holds the prompt, the response
@@ -181,7 +192,7 @@ packs, pack size, price each) and `packSizeFromDescription` ("1KG",
 nothing written) and posts (an ordinary PurchaseRequest created BOUGHT and
 received line by line; fees become simple entries; the photo is a Document).
 
-**Memory** (branch `receipt-memory`, PR #32, migration `receipt_aliases`):
+**Memory** (merged 29 September, PR #32, table `receipt_aliases`):
 each line comes back with its barcode; the first time a person tags a line
 to an ingredient and posts, the shop files it under `bc:<barcode>` (or
 `tx:<normalised text>`) with the pack size; the next receipt from that shelf
@@ -206,7 +217,7 @@ product route; branch managers get the payroll roster without pay; salary
 figures redacted in the audit trail; signup throttled; refresh tokens live 7
 days; a departed pairer's tablet reads nothing.
 
-On branch `session-security` (PR #33, one nullable column on
+Merged 29 September (PR #33, one nullable column on
 `user_sessions`): access tokens carry their session (`sid`) and die with it
 at the next request, so one lost device can be signed out alone and "sign
 out everywhere" bites at once; refresh tokens are matched by SHA-256 digest
@@ -228,10 +239,10 @@ the deploy runbook; `tasks/carolina-go-live.md` is the Day-1 runbook and
 first-week plan for Cafe Carolina. KJ's personal go-live to-do is a PDF he
 keeps outside the repo.
 
-## 12. Open as of 28 September 2026
+## 12. Open as of 29 September 2026
 
-- PR #32 (receipt memory + verdict) waits for KJ's "go"; merging deploys it.
-- PR #33 (session security) waits for KJ's "go" the same way.
+- Merged 29 September: PR #32 (receipt memory + verdict, table `receipt_aliases`) and
+  PR #33 (session security, column `user_sessions.refreshTokenSha`).
 - KJ links his phone for Telegram alerts (Settings → Telegram alerts →
   "Make my link" → "Open Telegram" → Start).
 - Shop setup on the real Carolina tenant before staff start: supervisor PIN,

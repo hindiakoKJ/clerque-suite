@@ -183,6 +183,25 @@ keeps its kitchen-set par. An ingredient that is out and needed by a live
 recipe is low even with no level; Check stock then asks for one pack of what
 was bought last time, or names it (`unpaced`) when nothing is on record.
 
+## 8c. Starting a real shop from its test shop
+
+Console → the new tenant → **Copy setup…** → the test shop's company code.
+It copies the whole setup (menu, prices, photos, sizes, add-ons,
+ingredients with costs and reorder levels, every recipe including preps',
+stations and category routing, discount types, price lists, promotions, the
+receipt reader's memory, the closing time and the running settings) and
+nothing that happened in the test shop (sales, stock, purchases, journals,
+staff, customers, vendors, identity). Only into an empty shop; one
+transaction. Code: `apps/api/src/admin/copy-setup.ts`.
+
+A dry run on the live data, rolled back, proves it without writing anything:
+`bash apps/api/scripts/probes/run-in-container.sh apps/api/scripts/probes/copy-setup-dry-run.js`
+(29 Sept on `cafe-carolina`: 129 products, 53 ingredients, 427 recipe lines,
+25 categories, 3 stations, 7 photos; exact match; 0 rows kept).
+
+Fix the setup on the test shop BEFORE copying (routing, prices, reorder
+levels): whatever it holds at that moment is what the real shop starts with.
+
 ## 9. The receipt reader
 
 `apps/api/src/procure/receipt-parser.ts` holds the prompt, the response

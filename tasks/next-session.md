@@ -7,7 +7,10 @@ the Railway CLI, and how changes reach master as a pull request).
 
 ## Waiting on KJ, in this order
 
-1. **Backup secrets.** He sets `DATABASE_PUBLIC_URL` and `BACKUP_PASSPHRASE`
+1. **Backup secrets.** The nightly workflow is switched off (6 Oct, KJ's
+   ask, `gh workflow disable`); switch it on again with
+   `gh workflow enable "Nightly backup" -R hindiakoKJ/clerque-backups`
+   once he sets `DATABASE_PUBLIC_URL` and `BACKUP_PASSPHRASE`
    in `hindiakoKJ/clerque-backups` (Settings → Secrets and variables →
    Actions). When he says they are set, confirm the next nightly run (or a
    manual run he starts from the Actions tab) produced a dump. A session
@@ -58,7 +61,14 @@ Found by the same map, wrong today with or without MariBank:
 
 ## Cafe Carolina (KJ's data work before copying the test shop)
 
-- Recipes: all 50 kitchen dishes and 12 counter items have none.
+- Kitchen recipes: on 7 Oct, Anne's recipe cost cards were loaded into the
+  test shop through Settings -> Import Templates: 72 ingredients, 19 batch
+  recipes (sauces, breading, breaded chicken, cooked pasta and rice) and the
+  recipes of 13 plates (6 starters, 7 wing flavours), 0 import errors. The
+  workbook and its "Questions for Anne" tab are kept outside this repository
+  (client prices); KJ has them. Still without recipes: the pasta and rice
+  meal plates, breakfast, salads, sandwiches, pastries, add-ons, and 12
+  counter items.
 - Reorder levels: 9 ingredients have none.
 - Close the 3 open August cashier shifts and the old buy list
   REQ-20260923-002 on the test shop.

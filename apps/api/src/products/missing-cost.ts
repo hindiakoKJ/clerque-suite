@@ -5,9 +5,12 @@ import { Prisma } from '@prisma/client';
  * list (GET /products/missing-cost) and the Ledger dashboard count, so the two
  * never disagree.
  *
- * Two ways a product books the wrong cost:
+ * Three ways a product books the wrong cost:
  *   1. It has no cost price at all.
- *   2. Its cost comes from its recipe, and a recipe line uses an ingredient
+ *   2. It has no recipe (none of its own, none on any size), so the sale books
+ *      its own cost price, and that price is ₱0: a retail tea or a kitchen
+ *      dish nobody has costed yet sells as free.
+ *   3. Its cost comes from its recipe, and a recipe line uses an ingredient
  *      with no price or a price of 0. The sale books that line at ₱0
  *      (costPrice ?? 0), so the plate looks cheaper than it is. A recipe
  *      product's own cost is recomputed as a number and is never null, so
@@ -29,6 +32,11 @@ export function missingCostWhere(tenantId: string, houseUsesRecipes: boolean): P
     isActive: true,
     OR: [
       { costPrice: null },
+      {
+        costPrice: { lte: 0 },
+        bomItems: { none: {} },
+        NOT: { variants: { some: { isActive: true, variantBomItems: { some: {} } } } },
+      },
       { ...costedByRecipe, bomItems: { some: { rawMaterial: UNPRICED_INGREDIENT } } },
       {
         ...costedByRecipe,

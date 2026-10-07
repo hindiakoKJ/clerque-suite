@@ -26,7 +26,13 @@ const unpriced = (rm: any) => rm == null || rm.costPrice == null || Number(rm.co
  */
 function flagged(where: any, p: any): boolean {
   return where.OR.some((clause: any) => {
-    if ('costPrice' in clause) return p.costPrice == null;
+    if (clause.costPrice === null) return p.costPrice == null;
+    if (clause.costPrice?.lte !== undefined) {
+      // No recipe of its own or on any size, so its own cost is what the sale books.
+      const hasRecipe = (p.bomItems ?? []).length > 0
+        || (p.variants ?? []).some((v: any) => v.isActive && v.variantBomItems.length > 0);
+      return !hasRecipe && p.costPrice != null && Number(p.costPrice) <= clause.costPrice.lte;
+    }
     if (clause.inventoryMode && p.inventoryMode !== clause.inventoryMode) return false;
     if (clause.bomItems) return (p.bomItems ?? []).some((b: any) => unpriced(b.rawMaterial));
     if (clause.variants) {
@@ -78,6 +84,21 @@ describe('which products sell at a wrong cost', () => {
 
   it('still flags the old case: a product with no cost price of its own', () => {
     expect(flagged(HOUSE_RECIPES, dish({ costPrice: null, inventoryMode: 'UNIT_BASED' }))).toBe(true);
+  });
+
+  it('flags an item with no recipe whose own cost is ₱0 (a retail tea or a dish nobody costed yet)', () => {
+    // Found live on Cafe Carolina: about fifty items at ₱0 with no recipe, and the
+    // Ledger said "Products missing cost: 0" because none of them was blank.
+    const tea = { name: 'Earl Grey', costPrice: 0, inventoryMode: 'UNIT_BASED', bomItems: [], variants: [] };
+    expect(flagged(HOUSE_RECIPES, tea)).toBe(true);
+    expect(flagged(missingCostWhere('t1', false), tea)).toBe(true);
+  });
+
+  it('leaves alone a priced retail item, and a ₱0 product whose sizes carry the recipe', () => {
+    expect(flagged(HOUSE_RECIPES, { name: 'Earl Grey', costPrice: 22, inventoryMode: 'UNIT_BASED', bomItems: [], variants: [] })).toBe(false);
+    expect(flagged(HOUSE_RECIPES, dish({ costPrice: 0, bomItems: [], variants: [{
+      isActive: true, variantBomItems: [{ rawMaterial: { name: 'Milk', costPrice: 0.09 } }],
+    }] }))).toBe(false);
   });
 
   it('ignores ingredient prices on a shop that does not cost from recipes', () => {

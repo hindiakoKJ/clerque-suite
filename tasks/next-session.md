@@ -7,18 +7,17 @@ the Railway CLI, and how changes reach master as a pull request).
 
 ## Waiting on KJ, in this order
 
-0. **Railway is not deploying.** The last API deploy is `e2c595c` (29 Sept);
-   nothing since has a Railway status on GitHub, although the service's
-   deploy trigger (branch master) still exists. The add-on swap (PR #34,
-   merged as `518c5f0`, with a migration) is therefore NOT live on the API,
-   while Vercel did deploy the web side. KJ: Railway -> Clerque ->
-   clerque-suite -> Deployments -> deploy the latest commit; if it says it
-   cannot reach the repository, give the Railway GitHub App access to
-   `hindiakoKJ/clerque-suite` again. After it is live: set up the Milk add-ons
-   (Milk (Hot): Oatmilk +30 / Breve +40, no-milk amount 200 ml; Milk (Iced):
-   150 ml; swap out Emborg Fresh Milk + the other milk, swap in Oatside or
-   Breve Milk), hide the Oatmilk and Breve products, ring one test latte.
-
+0. **Railway auto-deploy:** pushes after 29 Sept did not deploy; KJ ran
+   "Deploy Latest Commit" (Ctrl+K) on 7 Oct and `064f0e6` went live with
+   the add-on swap migration. If a push again shows no Railway status on
+   GitHub, check the Railway GitHub App's access to this repository.
+   **Milk add-ons are live on the test shop:** Milk (Hot) on 19 drinks and
+   Milk (Iced) on 36 (Oatmilk +30, Breve +40; swap out Emborg Fresh Milk and
+   the other milk, swap in Oatside or Breve Milk; no-milk amount = the regular
+   dose, 200 ml hot / 150 ml iced). The Oatmilk and Breve products are
+   hidden. Proof: ORD-2026-000162 costed Cafe Latte (Hot)+Oatmilk 54.30
+   (200 ml Oatside, no fresh milk), Americano (Hot)+Oatmilk 54.90, Cafe Latte
+   (Iced)+Breve 39.15.
 1. **Backup secrets.** The nightly workflow is switched off (6 Oct, KJ's
    ask, `gh workflow disable`); switch it on again with
    `gh workflow enable "Nightly backup" -R hindiakoKJ/clerque-backups`

@@ -7,6 +7,18 @@ the Railway CLI, and how changes reach master as a pull request).
 
 ## Waiting on KJ, in this order
 
+0. **Railway is not deploying.** The last API deploy is `e2c595c` (29 Sept);
+   nothing since has a Railway status on GitHub, although the service's
+   deploy trigger (branch master) still exists. The add-on swap (PR #34,
+   merged as `518c5f0`, with a migration) is therefore NOT live on the API,
+   while Vercel did deploy the web side. KJ: Railway -> Clerque ->
+   clerque-suite -> Deployments -> deploy the latest commit; if it says it
+   cannot reach the repository, give the Railway GitHub App access to
+   `hindiakoKJ/clerque-suite` again. After it is live: set up the Milk add-ons
+   (Milk (Hot): Oatmilk +30 / Breve +40, no-milk amount 200 ml; Milk (Iced):
+   150 ml; swap out Emborg Fresh Milk + the other milk, swap in Oatside or
+   Breve Milk), hide the Oatmilk and Breve products, ring one test latte.
+
 1. **Backup secrets.** The nightly workflow is switched off (6 Oct, KJ's
    ask, `gh workflow disable`); switch it on again with
    `gh workflow enable "Nightly backup" -R hindiakoKJ/clerque-backups`

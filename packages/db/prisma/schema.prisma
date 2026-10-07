@@ -2269,12 +2269,17 @@ model ModifierOption {
 /// Unit is a denormalized snapshot so the consumption code doesn't need to
 /// join through RawMaterial for unit math. The web admin enforces that
 /// option.unit matches RawMaterial.unit at edit time.
+///
+/// `role` makes a line part of a SWAP instead of a plain add ("Oatmilk": take
+/// the drink's fresh milk out, pour oat milk instead, at the drink's own
+/// amount). See ModifierIngredientRole and orders/recipe-usage.ts.
 model ModifierOptionIngredient {
   id               String  @id @default(cuid())
   modifierOptionId String
   rawMaterialId    String
   quantity         Decimal @db.Decimal(14, 4)
   unit             String
+  role             ModifierIngredientRole @default(ADD)
 
   option      ModifierOption @relation(fields: [modifierOptionId], references: [id], onDelete: Cascade)
   rawMaterial RawMaterial    @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
@@ -2283,6 +2288,20 @@ model ModifierOptionIngredient {
   @@index([modifierOptionId])
   @@index([rawMaterialId])
   @@map("modifier_option_ingredients")
+}
+
+/// What one ingredient line of an add-on option does to the drink's recipe.
+///   ADD       the amount is added on top of the recipe (signed: a negative
+///             amount cancels part of a recipe ingredient, as before).
+///   SWAP_OUT  an ingredient the swap takes out, at whatever amount the drink
+///             uses (its quantity is not used and is stored as 0).
+///   SWAP_IN   the ingredient that goes in instead, at the amount taken out.
+///             Its own quantity is what goes in when the drink has none of the
+///             SWAP_OUT ingredients and does not already use this one.
+enum ModifierIngredientRole {
+  ADD
+  SWAP_OUT
+  SWAP_IN
 }
 
 /// Junction: which modifier groups apply to a product

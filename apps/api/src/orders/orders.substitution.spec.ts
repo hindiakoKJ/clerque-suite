@@ -24,7 +24,7 @@ describe('OrdersService — ingredient substitution', () => {
   /** Records what each raw material was actually asked to give up. */
   let consumed: Record<string, number>;
 
-  function buildPrisma(modifierIngredients: Array<{ rawMaterialId: string; quantity: number; rm: typeof DAIRY }>) {
+  function buildPrisma(modifierIngredients: Array<{ rawMaterialId: string; quantity: number; rm: typeof DAIRY; role?: string }>) {
     consumed = {};
     const stock: Record<string, number> = { 'rm-dairy': 5000, 'rm-oat': 5000, 'rm-beans': 5000 };
 
@@ -50,7 +50,9 @@ describe('OrdersService — ingredient substitution', () => {
         ]),
       },
       modifierOption: {
-        findMany: jest.fn().mockResolvedValue([
+        // Hands back a line's swap kind only when the sale asks for it, so a
+        // sale that forgot to read it would fail the swap test below.
+        findMany: jest.fn(({ select }: any) => Promise.resolve([
           {
             id: 'opt-oat',
             recipeMultiplier: 1,
@@ -58,9 +60,10 @@ describe('OrdersService — ingredient substitution', () => {
               rawMaterialId: m.rawMaterialId,
               quantity: m.quantity,
               rawMaterial: m.rm,
+              ...(select?.ingredients?.select?.role ? { role: m.role ?? 'ADD' } : {}),
             })),
           },
-        ]),
+        ])),
       },
       rawMaterialInventory: {
         // Deductions are relative now, so a concurrent sale cannot be erased;
@@ -222,6 +225,21 @@ describe('OrdersService — ingredient substitution', () => {
 
     expect(consumed[BEANS.id]).toBe(23);
     expect(consumed[DAIRY.id]).toBe(200);
+  });
+
+  it('a swap pours oat milk at the latte own 200 ml, no dairy, and costs only what was poured', async () => {
+    // "Oatmilk" as a swap: dairy out, oat in; 30 ml is only for a drink with no milk.
+    const { prisma, tx } = buildPrisma([
+      { rawMaterialId: DAIRY.id, quantity: 0,  rm: DAIRY, role: 'SWAP_OUT' },
+      { rawMaterialId: OAT.id,   quantity: 30, rm: OAT,   role: 'SWAP_IN' },
+    ]);
+    await makeService(prisma).create(TENANT, 'cashier-1', payload() as never);
+
+    expect(consumed[OAT.id]).toBe(200);
+    expect(consumed[DAIRY.id] ?? 0).toBe(0);
+    expect(consumed[BEANS.id]).toBe(18);
+    const cogsCall = (tx.accountingEvent.create as jest.Mock).mock.calls.find((c) => c[0]?.data?.type === 'COGS');
+    expect(Number(cogsCall[0].data.payload.lines[0].unitCost)).toBeCloseTo(47.70, 2);
   });
 
   it('costs the drink on what was actually poured', async () => {

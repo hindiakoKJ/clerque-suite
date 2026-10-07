@@ -246,8 +246,8 @@ export async function copyShopSetup(tx: Tx, fromTenantId: string, toTenantId: st
   count('addOnLinks', links.length);
 
   const optionIngredients = (await tx.modifierOptionIngredient.findMany({ where: { option: { group: { tenantId: fromTenantId } } } }))
-    .map((i) => ({ modifierOptionId: mapped(optionMap, i.modifierOptionId), rawMaterialId: mapped(materialMap, i.rawMaterialId), quantity: i.quantity, unit: i.unit }))
-    .filter((i): i is { modifierOptionId: string; rawMaterialId: string; quantity: Prisma.Decimal; unit: string } => !!i.modifierOptionId && !!i.rawMaterialId);
+    .map((i) => ({ modifierOptionId: mapped(optionMap, i.modifierOptionId), rawMaterialId: mapped(materialMap, i.rawMaterialId), quantity: i.quantity, unit: i.unit, role: i.role }))
+    .filter((i): i is { modifierOptionId: string; rawMaterialId: string; quantity: Prisma.Decimal; unit: string; role: typeof i.role } => !!i.modifierOptionId && !!i.rawMaterialId);
   if (optionIngredients.length) await tx.modifierOptionIngredient.createMany({ data: optionIngredients });
   count('addOnRecipeLines', optionIngredients.length);
 

@@ -1106,6 +1106,7 @@ export class OrdersService {
                 select: {
                   rawMaterialId: true,
                   quantity:      true,
+                  role:          true,
                   rawMaterial:   { select: { name: true, unit: true, costPrice: true, lotsTracked: true } },
                 },
               },

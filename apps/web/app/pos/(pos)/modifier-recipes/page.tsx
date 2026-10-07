@@ -32,11 +32,15 @@ interface RawMaterial {
   costPrice: number | null;
 }
 
+/** ADD: on top of the recipe. SWAP_OUT / SWAP_IN: a swap at the drink's own amount. */
+type LineRole = 'ADD' | 'SWAP_OUT' | 'SWAP_IN';
+
 interface Ingredient {
   id: string;
   rawMaterialId: string;
   quantity: string | number;
   unit: string;
+  role?: LineRole;
   rawMaterial: { id: string; name: string; unit: string; costPrice: number | null };
 }
 
@@ -62,7 +66,7 @@ interface ModifierGroup {
 /** Local-state shape for inline edits before the user hits Save. */
 interface OptionDraft {
   recipeMultiplier: string;
-  ingredients: Array<{ rawMaterialId: string; quantity: string; unit: string }>;
+  ingredients: Array<{ rawMaterialId: string; quantity: string; unit: string; role: LineRole }>;
 }
 
 export default function ModifierRecipesPage() {
@@ -92,6 +96,7 @@ export default function ModifierRecipesPage() {
         rawMaterialId: i.rawMaterialId,
         quantity:      String(i.quantity),
         unit:          i.unit,
+        role:          i.role ?? 'ADD',
       })),
     };
   };
@@ -126,12 +131,14 @@ export default function ModifierRecipesPage() {
       // still reporting a successful save — so the substitution the help
       // panel above tells you to enter could never actually be stored, and
       // re-saving a seeded option would quietly delete its cancel row.
+      // A swapped-out line has no amount of its own: it takes whatever the drink pours.
       const items = draft.ingredients
-        .filter((i) => i.rawMaterialId && Number.isFinite(Number(i.quantity)) && Number(i.quantity) !== 0)
+        .filter((i) => i.rawMaterialId && (i.role === 'SWAP_OUT' || (Number.isFinite(Number(i.quantity)) && Number(i.quantity) !== 0)))
         .map((i) => ({
           rawMaterialId: i.rawMaterialId,
-          quantity:      Number(i.quantity),
+          quantity:      i.role === 'SWAP_OUT' ? 0 : Number(i.quantity),
           unit:          i.unit,
+          role:          i.role,
         }));
       await api.post(`/modifiers/groups/${group.id}/options/${opt.id}/ingredients`, {
         items,
@@ -169,6 +176,7 @@ export default function ModifierRecipesPage() {
           rawMaterialId: firstRm?.id ?? '',
           quantity:      '',
           unit:          firstRm?.unit ?? '',
+          role:          'ADD',
         },
       ],
     });
@@ -186,7 +194,8 @@ export default function ModifierRecipesPage() {
   const costFor = (draft: OptionDraft): number => {
     if (!rmQ.data) return 0;
     return draft.ingredients.reduce((acc, i) => {
-      if (!i.rawMaterialId) return acc;
+      // A swap's cost depends on each drink's own amount, so only plain lines are estimated here.
+      if (!i.rawMaterialId || i.role !== 'ADD') return acc;
       const rm = rmQ.data!.find((r) => r.id === i.rawMaterialId);
       if (!rm?.costPrice) return acc;
       const qty = Number(i.quantity);
@@ -209,6 +218,7 @@ export default function ModifierRecipesPage() {
       if (a.rawMaterialId !== b.rawMaterialId) return true;
       if (Number(a.quantity) !== Number(b.quantity)) return true;
       if (a.unit !== b.unit) return true;
+      if (a.role !== (b.role ?? 'ADD')) return true;
     }
     return false;
   };
@@ -243,10 +253,15 @@ export default function ModifierRecipesPage() {
             base recipe. &quot;Extra shot&quot; = +5g coffee beans.
           </li>
           <li>
-            <b>Replace an ingredient</b> — a <b>negative</b> amount cancels what the
-            base recipe calls for, so it is never poured and never charged. Oat milk
-            on a latte is two rows: <b>-200ml</b> fresh milk and <b>+200ml</b> oat milk.
-            The drink then costs oat-milk money, not both milks.
+            <b>Swap an ingredient</b> — mark the milks it replaces as <b>Swap out</b> and
+            the oat milk as <b>Swap in</b>. Each drink then pours oat milk at its own
+            amount (200ml hot, 150ml iced) and is charged for oat milk only. A drink with
+            no milk gets the Swap in amount; a drink already made with oat milk is left
+            as it is.
+          </li>
+          <li>
+            <b>Cancel a fixed amount</b> — a <b>negative</b> amount takes exactly that much
+            of a recipe ingredient away.
           </li>
           <li>
             COGS is captured automatically from <code className="bg-amber-100 px-1 rounded">RawMaterial.costPrice</code> (WAC).
@@ -359,6 +374,20 @@ export default function ModifierRecipesPage() {
                                   return (
                                     <div key={idx} className="flex flex-wrap items-center gap-2">
                                       <select
+                                        value={row.role}
+                                        onChange={(e) => {
+                                          const next = [...draft.ingredients];
+                                          next[idx] = { ...next[idx], role: e.target.value as LineRole };
+                                          patchDraft(opt.id, { ingredients: next });
+                                        }}
+                                        aria-label="What this line does"
+                                        className="border rounded px-2 py-1 text-sm bg-white w-28"
+                                      >
+                                        <option value="ADD">Add</option>
+                                        <option value="SWAP_OUT">Swap out</option>
+                                        <option value="SWAP_IN">Swap in</option>
+                                      </select>
+                                      <select
                                         value={row.rawMaterialId}
                                         onChange={(e) => {
                                           const newRm = rmQ.data?.find((r) => r.id === e.target.value);
@@ -377,18 +406,23 @@ export default function ModifierRecipesPage() {
                                           <option key={r.id} value={r.id}>{r.name}</option>
                                         ))}
                                       </select>
-                                      <input
-                                        type="number"
-                                        step="0.01"
-                                        value={row.quantity}
-                                        onChange={(e) => {
-                                          const next = [...draft.ingredients];
-                                          next[idx] = { ...next[idx], quantity: e.target.value };
-                                          patchDraft(opt.id, { ingredients: next });
-                                        }}
-                                        placeholder="qty"
-                                        className="border rounded px-2 py-1 text-sm w-24 font-mono bg-white"
-                                      />
+                                      {row.role === 'SWAP_OUT' ? (
+                                        <span className="text-xs text-gray-500 w-24">drink&rsquo;s own amount</span>
+                                      ) : (
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          value={row.quantity}
+                                          onChange={(e) => {
+                                            const next = [...draft.ingredients];
+                                            next[idx] = { ...next[idx], quantity: e.target.value };
+                                            patchDraft(opt.id, { ingredients: next });
+                                          }}
+                                          placeholder={row.role === 'SWAP_IN' ? 'if no milk' : 'qty'}
+                                          title={row.role === 'SWAP_IN' ? 'Poured only into a drink that has none of the Swap out items' : undefined}
+                                          className="border rounded px-2 py-1 text-sm w-24 font-mono bg-white"
+                                        />
+                                      )}
                                       <span className="text-xs text-gray-600 w-16">{rm?.unit ?? row.unit}</span>
                                       <button
                                         type="button"

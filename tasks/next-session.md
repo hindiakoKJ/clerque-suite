@@ -9,8 +9,10 @@ the Railway CLI, and how changes reach master as a pull request).
 
 0. **Railway auto-deploy:** pushes after 29 Sept did not deploy; KJ ran
    "Deploy Latest Commit" (Ctrl+K) on 7 Oct and `064f0e6` went live with
-   the add-on swap migration. If a push again shows no Railway status on
-   GitHub, check the Railway GitHub App's access to this repository.
+   the add-on swap migration. Cause: the Railway GitHub App's repository
+   access had been narrowed to yms-platform only; KJ set it to All
+   repositories on 7 Oct. If a push again shows no Railway status on GitHub,
+   check github.com/settings/installations -> Railway App first.
    **Milk add-ons are live on the test shop:** Milk (Hot) on 19 drinks and
    Milk (Iced) on 36 (Oatmilk +30, Breve +40; swap out Emborg Fresh Milk and
    the other milk, swap in Oatside or Breve Milk; no-milk amount = the regular

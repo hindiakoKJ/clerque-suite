@@ -66,6 +66,12 @@ describe('the buy list with learned levels', () => {
     return new InventoryService(prisma, {} as any);
   }
 
+  // The level learns from the last fourteen days counted back from "now", so
+  // the test fixes now: written on 29 Sept, it began failing once 22 Sept
+  // (its only day of use) fell out of the window.
+  beforeEach(() => jest.useFakeTimers({ now: new Date('2026-09-29T12:00:00+08:00'), doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] }));
+  afterEach(() => jest.useRealTimers());
+
   it('a typed level wins; a learned one fills the gap; an ingredient out and in a recipe is low with no level at all', async () => {
     used.mockResolvedValue({ days: [{ day: '2026-09-22' }], rows: [row('milk', 1400), row('beans', 800), row('sauce', 5000)] });
     const low = await svc([

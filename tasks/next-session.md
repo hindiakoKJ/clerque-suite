@@ -5,6 +5,15 @@ Start every cloud session with `bash scripts/cloud-session-setup.sh`, and
 read `docs/OPERATIONS.md` (section 7 covers cloud sessions: the environment,
 the Railway CLI, and how changes reach master as a pull request).
 
+## KJ's priorities (7 Oct)
+
+Recipe-based costing and reporting first, then the kitchen/bar/customer
+displays, then "what to buy". Coffee shops first; the second coffee shop must
+be plug and play. Reorder levels get filled on site. Parked until the test
+shop is complete: one import file with everything for the real Carolina
+shop (Copy setup does the same in one step). Later: one "E-wallet" payment
+for GCash/Maya/MariBank/other wallets, QR Ph kept separate.
+
 ## Waiting on KJ, in this order
 
 0. **Railway auto-deploy:** pushes after 29 Sept did not deploy; KJ ran

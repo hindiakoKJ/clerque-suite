@@ -524,7 +524,7 @@ export class RecipeCatchupService {
           select: {
             id: true,
             recipeMultiplier: true,
-            ingredients: { select: { rawMaterialId: true, quantity: true } },
+            ingredients: { select: { rawMaterialId: true, quantity: true, role: true } },
           },
         })
       : [];

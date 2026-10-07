@@ -13,8 +13,13 @@ import { Prisma } from '@prisma/client';
  *   - The highest recipe multiplier among the chosen add-ons scales that base
  *     recipe (a "Grande" at 1.25). Highest, never compounded.
  *   - Each chosen add-on's own ingredients are added. They are signed: a
- *     negative line cancels a base ingredient, which is how "oat milk instead
- *     of dairy" is expressed.
+ *     negative line cancels a base ingredient by a fixed amount.
+ *   - Then each add-on's SWAP: whatever the drink now pours of the SWAP_OUT
+ *     ingredients goes in as the SWAP_IN ingredient, at the same amount, so
+ *     "Oatmilk" takes 200 ml oat on a hot latte and 150 ml on an iced one. A
+ *     drink with none of them gets the SWAP_IN line's own amount, unless it
+ *     already uses that ingredient (an oat matcha stays as it is). Swaps run
+ *     after the plain lines, so milk an add-on added is swapped too.
  *   - Netted per ingredient, then floored at zero: over-cancelling settles at
  *     "none used", never at stock or cost handed back.
  */
@@ -25,6 +30,8 @@ export interface RecipeLine<R> {
   rawMaterialId: string;
   quantity: Qty;
   rawMaterial?: R | null;
+  /** Add-on lines only: ADD (the default), SWAP_OUT or SWAP_IN. */
+  role?: string | null;
 }
 
 export interface RecipeOption<R> {
@@ -57,8 +64,22 @@ export function recipeUsagePerUnit<R>(
     if (existing) existing.perUnit += qty;
     else netted.set(line.rawMaterialId, { rawMaterialId: line.rawMaterialId, perUnit: qty, rawMaterial: line.rawMaterial ?? null });
   };
+  const isSwap = (line: RecipeLine<R>) => line.role === 'SWAP_OUT' || line.role === 'SWAP_IN';
   for (const line of base) add(line, Number(line.quantity) * multiplier);
-  for (const o of options) for (const ing of o.ingredients) add(ing, Number(ing.quantity));
+  for (const o of options) for (const ing of o.ingredients) if (!isSwap(ing)) add(ing, Number(ing.quantity));
+
+  for (const o of options) {
+    const swapIn = o.ingredients.find((i) => i.role === 'SWAP_IN');
+    if (!swapIn) continue;
+    let poured = 0;
+    for (const out of o.ingredients) {
+      if (out.role !== 'SWAP_OUT' || out.rawMaterialId === swapIn.rawMaterialId) continue;
+      const line = netted.get(out.rawMaterialId);
+      if (line && line.perUnit > 0) { poured += line.perUnit; line.perUnit = 0; }
+    }
+    if (poured > 0) add(swapIn, poured);
+    else if (!((netted.get(swapIn.rawMaterialId)?.perUnit ?? 0) > 0)) add(swapIn, Number(swapIn.quantity));
+  }
 
   return [...netted.values()]
     .map((l) => ({ ...l, perUnit: Math.max(l.perUnit, 0) }))

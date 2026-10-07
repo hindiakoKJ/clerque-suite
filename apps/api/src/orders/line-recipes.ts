@@ -54,7 +54,7 @@ export async function loadLineRecipes(
         where:  { id: { in: optionIds } },
         select: {
           id: true, recipeMultiplier: true,
-          ingredients: { select: { rawMaterialId: true, quantity: true, rawMaterial: { select: RAW } } },
+          ingredients: { select: { rawMaterialId: true, quantity: true, role: true, rawMaterial: { select: RAW } } },
         },
       })
     : [];

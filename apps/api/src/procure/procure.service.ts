@@ -2682,7 +2682,7 @@ export class ProcureService {
           orderBy: { name: 'asc' },
         }),
         this.prisma.modifierOptionIngredient.findMany({
-          where:  { rawMaterialId: { in: itemIds }, option: { isActive: true, group: { tenantId, isActive: true } } },
+          where:  { rawMaterialId: { in: itemIds }, role: { not: 'SWAP_OUT' }, option: { isActive: true, group: { tenantId, isActive: true } } },
           select: { rawMaterialId: true, option: { select: { name: true } } },
         }),
       ]);

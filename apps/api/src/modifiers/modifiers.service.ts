@@ -58,7 +58,11 @@ export interface UpsertModifierIngredientDto {
   quantity: number;
   /// Display unit; must match the underlying RawMaterial.unit (validated).
   unit: string;
+  /// ADD (default), SWAP_OUT or SWAP_IN -- see ModifierIngredientRole.
+  role?: 'ADD' | 'SWAP_OUT' | 'SWAP_IN';
 }
+
+const INGREDIENT_ROLES = ['ADD', 'SWAP_OUT', 'SWAP_IN'] as const;
 
 @Injectable()
 export class ModifiersService {
@@ -203,11 +207,16 @@ export class ModifiersService {
       }
       const unitByRm = new Map(rms.map((r) => [r.id, r.unit]));
       for (const i of items) {
+        if (i.role != null && !(INGREDIENT_ROLES as readonly string[]).includes(i.role)) {
+          throw new ConflictException(`Unknown line kind "${i.role}". Use ADD, SWAP_OUT or SWAP_IN.`);
+        }
         if (unitByRm.get(i.rawMaterialId) !== i.unit) {
           throw new ConflictException(
             `Unit mismatch on ${i.rawMaterialId}: raw material uses ${unitByRm.get(i.rawMaterialId)}, request sent ${i.unit}.`,
           );
         }
+        // A swapped-out line takes whatever the drink pours, so it has no amount of its own.
+        if (i.role === 'SWAP_OUT') continue;
         // A NEGATIVE quantity is a substitution: it cancels what the product's
         // base recipe calls for, so "Oat milk" is -200ml dairy + 200ml oat and
         // the dairy is neither poured nor charged. At sale time the base and
@@ -220,6 +229,30 @@ export class ModifiersService {
             'Use a negative amount to replace an ingredient from the base recipe.',
           );
         }
+        if (i.role === 'SWAP_IN' && i.quantity < 0) {
+          throw new ConflictException('The swapped-in amount is what goes into a drink that has none to swap, so it must be more than 0.');
+        }
+      }
+
+      // A swap: what comes out (e.g. Emborg Fresh Milk, Breve Milk) goes in as
+      // ONE ingredient (Oatside) at the same amount, so all of them must be
+      // counted in that ingredient's unit.
+      const swapIns = items.filter((i) => i.role === 'SWAP_IN');
+      const swapOuts = items.filter((i) => i.role === 'SWAP_OUT');
+      if (swapIns.length > 1) {
+        throw new ConflictException('An option can put in only one ingredient as a swap.');
+      }
+      if (swapOuts.length > 0 && swapIns.length === 0) {
+        throw new ConflictException('Say what goes in instead: a swap needs one ingredient marked SWAP_IN.');
+      }
+      const into = swapIns[0];
+      for (const o of swapOuts) {
+        if (into && unitByRm.get(o.rawMaterialId) !== unitByRm.get(into.rawMaterialId)) {
+          throw new ConflictException(
+            `A swap moves the same amount from one ingredient to another, so both must be counted in the same unit ` +
+            `(${unitByRm.get(o.rawMaterialId)} vs ${unitByRm.get(into.rawMaterialId)}).`,
+          );
+        }
       }
     }
 
@@ -230,8 +263,11 @@ export class ModifiersService {
           data: items.map((i) => ({
             modifierOptionId: optionId,
             rawMaterialId:    i.rawMaterialId,
-            quantity:         i.quantity,
+            // A swapped-out line has no amount of its own; 0 also keeps it out
+            // of every reader that counts only what an add-on adds.
+            quantity:         i.role === 'SWAP_OUT' ? 0 : i.quantity,
             unit:             i.unit,
+            role:             i.role ?? 'ADD',
           })),
         });
       }

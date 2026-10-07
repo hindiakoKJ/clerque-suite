@@ -69,7 +69,8 @@ Found by the same map, wrong today with or without MariBank:
   (client prices); KJ has them. Still without recipes: the pasta and rice
   meal plates, breakfast, salads, sandwiches, pastries, add-ons, and 12
   counter items.
-- Reorder levels: 9 ingredients have none.
+- Reorder levels: none yet on the 72 kitchen ingredients and the 19 batch
+  recipes, plus 9 drinks ingredients.
 - Close the 3 open August cashier shifts and the old buy list
   REQ-20260923-002 on the test shop.
 - On the real shop: supervisor PIN, hide costs from staff, ledger mode,

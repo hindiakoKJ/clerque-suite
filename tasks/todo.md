@@ -1,5 +1,79 @@
 # Open work — Clerque
 
+## Coffee shop: every peso in the books, BIR in plain words (plan, 2026-10-08)
+
+KJ, 8 Oct: coffee shops first (Cafe Carolina, then referrals); POS, Procure and
+Ledger together. The Ledger is not an ERP: every sale, purchase and operating
+expense must reach the books so a small shop has a clean ledger for BIR, and an
+owner without an accounting degree can read it and file from it.
+
+**Checked 8 Oct (read-only, code on master `c9b056c`):** every till payment
+path, every way the shop spends, every BIR output; BIR rules as of Oct 2026 from
+two independent researchers, disagreements settled against bir.gov.ph and the
+law text.
+
+**Already right:** every ordinary sale (cash, GCash, Maya, QR Ph, split) posts
+Dr 1010/1031, Cr 4010, with no VAT for a non-VAT shop; recipe COGS including
+add-ons and milk swaps; voids, waste, drawer over/short; Procure purchases from
+shop cash, bank or the owner; Record Entry for rent, utilities, wages, equipment
+and owner in/out. The slip is a non-VAT acknowledgement receipt and carries
+"THIS DOCUMENT IS NOT VALID FOR CLAIM OF INPUT TAX."
+
+### Step 1: drawer and refund leaks (daily at a coffee shop; no database change)
+`ShiftCashOut.category` is free text, so new paid-out kinds need no migration.
+- [ ] Pay for an ingredient from the drawer (ice, water, milk): one action that
+      adds the stock and lowers the drawer's expected cash once. Today a
+      paid-out books an expense with no stock, and Procure "Shop cash" leaves
+      the drawer short at close.
+- [ ] Owner takes cash from the drawer: Owner's drawing (3020), not an expense,
+      and the drawer expects it.
+- [ ] "Change fund" (cash swapped for coins that come back) is not an expense.
+- [ ] Paid-out categories post where they belong (wages 6010, LPG/fuel,
+      utilities, supplies 6070); the till's list and the server's map agree.
+- [ ] A refund on a senior/PWD or otherwise discounted order pays back what the
+      customer paid for that item, not the menu price.
+- [ ] Paying income tax does not lower the next 1701Q estimate.
+- [ ] Record Entry kinds for taxes and licenses (permits, percentage tax),
+      SSS/PhilHealth/Pag-IBIG employer share, bank charges, internet/phone, so
+      they stop piling into Miscellaneous.
+
+### Step 2: BIR in plain words, from the one ledger (Simple-books owners too)
+- [ ] A Taxes page in Simple mode: what to file this quarter, the due date and
+      how much, from the posted books. 2551Q = 3% of gross sales less senior/PWD
+      discounts, due 25 days after the quarter (Q3 2026: Mon 26 Oct). 1701Q due
+      May 15 / Aug 15 / Nov 15, no Q4 (Q3 2026: Mon 16 Nov), with the tax for the
+      shop's income tax option (8% or graduated), set once per shop. On the 8%
+      option there is no 2551Q.
+- [ ] Senior/PWD register (name, ID number, date, slip number, gross, discount):
+      BIR disallows the deduction without it; the till already captures name and ID.
+- [ ] One "gross sales" figure: the Z-reading, Sales Book and 2551Q agree on
+      refunds, promos and senior discounts.
+- [ ] Cash receipts / disbursements books built from the posted ledger, so
+      Record Entry and Procure are in them.
+- [ ] A non-VAT shop never sees the VAT return (2550Q) or VAT columns; fix the
+      help page's 1701Q dates.
+- [ ] Rent: any business paying rent withholds 5%, files 0619-E (10th of the
+      next month, months 1-2) and 1601-EQ (end of the month after the quarter),
+      and gives the landlord a 2307. Record Entry rent cannot carry this today.
+- [ ] Z-reading line for the day's BIR invoices: until Clerque is a
+      BIR-accredited POS, the shop issues invoices from its ATP booklet for each
+      sale of P500 or more and one invoice for the day's smaller sales.
+
+### Step 3: E-wallet (needs a migration: branch + KJ's word)
+- [ ] One E-wallet method for GCash/Maya/MariBank/others, QR Ph separate; the
+      till's Card tab records CARD, not QR_PH.
+- [ ] A settlement that arrives net of a fee books the fee and clears 1031 (today
+      it turns DISPUTED and nothing posts).
+- [ ] Money kept in the GCash wallet has its own account, so paying a supplier
+      from GCash comes out of it, not out of the bank.
+- [ ] GCash/Maya withhold 0.5% of merchant payouts unless the shop files a sworn
+      declaration (P500k or less); record it as creditable tax with its 2307.
+
+### Noted, not now
+Purchase Book (only VAT shops must keep subsidiary sales/purchase journals);
+depreciation and buying on credit in Simple mode; deleting a paid-out (API only,
+no screen calls it); a late sale into a closed month.
+
 ## Kitchen-readiness fixes (2026-08-30) — ALL FOUR FIXED
 
 Found by adding a real food menu to a real tenant and running it: 11 kitchen

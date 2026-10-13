@@ -12,6 +12,27 @@ import { PH_TIMEZONE } from '@repo/shared-types';
  */
 const PAID_OUT_APPROVAL_THRESHOLD = 500;
 
+/**
+ * The cash a sale left in the drawer.
+ *
+ * A paid sale: its total less what GCash, Maya or QR covered (the total, not
+ * what was tendered, so change handed back is left out). A sale on account
+ * (CHARGE) carries no payment at the till: only cash actually taken for it
+ * counts. Reading its total as cash made every utang look like money in the
+ * drawer, and the cashier came up short by it at closing.
+ */
+export function cashKeptBy(order: {
+  invoiceType?: string | null;
+  totalAmount: Prisma.Decimal | number | string;
+  payments: Array<{ method: string; amount: Prisma.Decimal | number | string }>;
+}): number {
+  if (order.invoiceType === 'CHARGE') {
+    return order.payments.filter((p) => p.method === 'CASH').reduce((s, p) => s + Number(p.amount), 0);
+  }
+  const nonCash = order.payments.filter((p) => p.method !== 'CASH').reduce((s, p) => s + Number(p.amount), 0);
+  return Math.max(0, Number(order.totalAmount) - nonCash);
+}
+
 /** See ShiftSummary.countCheck. */
 export interface CountCheck {
   /** How long a drawer may go uncounted, in minutes. */
@@ -519,10 +540,7 @@ ${line}` : line },
       include: { payments: true },
     });
     let cashSalesNet = 0;
-    for (const o of orders) {
-      const nonCash = o.payments.reduce((s, p) => s + (p.method !== 'CASH' ? Number(p.amount) : 0), 0);
-      cashSalesNet += Math.max(0, Number(o.totalAmount) - nonCash);
-    }
+    for (const o of orders) cashSalesNet += cashKeptBy(o);
     const priorCashOuts = await this.prisma.shiftCashOut.aggregate({
       where: { shiftId },
       _sum: { amount: true },
@@ -844,12 +862,7 @@ ${line}` : line },
       include: { payments: true },
     });
     let unattributedCashSales = 0;
-    for (const o of unattributed) {
-      const nonCash = o.payments
-        .filter((p) => p.method !== 'CASH')
-        .reduce((s, p) => s + Number(p.amount), 0);
-      unattributedCashSales += Math.max(0, Number(o.totalAmount) - nonCash);
-    }
+    for (const o of unattributed) unattributedCashSales += cashKeptBy(o);
 
     let cashSales = 0;
     let nonCashSales = 0;
@@ -880,9 +893,8 @@ ${line}` : line },
         voidCount++;
         const refundedCash = voidedRefundedCash.get(order.id) ?? 0;
         if (refundedCash > 0) {
-          const nonCash = order.payments.filter((p) => p.method !== 'CASH').reduce((t, p) => t + Number(p.amount), 0);
           // Never more than the cash this order actually brought in.
-          cashSales += Math.min(refundedCash, Math.max(0, Number(order.totalAmount) - nonCash));
+          cashSales += Math.min(refundedCash, cashKeptBy(order));
         }
         continue;
       }
@@ -899,10 +911,9 @@ ${line}` : line },
       }
       nonCashSales += orderNonCash;
 
-      // Net cash kept = order total minus what non-cash covered.
-      // Using order total (not tendered) correctly excludes change given back.
-      const orderCashNet = Math.max(0, Number(order.totalAmount) - orderNonCash);
-      cashSales += orderCashNet;
+      // Net cash kept (cashKeptBy): the total less non-cash, or for a sale on
+      // account only the cash actually taken.
+      cashSales += cashKeptBy(order);
     }
 
     /*

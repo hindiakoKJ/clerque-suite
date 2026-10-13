@@ -3,7 +3,7 @@ import { DEVICE_TOKEN_SURFACES } from './lib/device-surfaces';
 import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { levelValue } from '@repo/shared-types';
-import { POS_ROLES, LEDGER_ROLES, PROCURE_ROLES } from '@/lib/app-roles';
+import { POS_ROLES, LEDGER_ROLES, PROCURE_ROLES, INVENTORY_ROLES } from '@/lib/app-roles';
 
 /**
  * Multi-tenant + multi-domain routing middleware.
@@ -181,6 +181,11 @@ export function middleware(req: NextRequest) {
   }
   if (pathname.startsWith('/procure') && !PROCURE_ROLES.has(user.role)) {
     return NextResponse.redirect(new URL('/select?reason=procure-restricted', req.url));
+  }
+  // Inventory (tags, photos, labels) is role-gated like Procure: no AppAccess
+  // row exists for it, so the role table is the whole gate.
+  if (pathname.startsWith('/inventory') && !INVENTORY_ROLES.has(user.role)) {
+    return NextResponse.redirect(new URL('/select?reason=inventory-restricted', req.url));
   }
   if (pathname.startsWith('/ledger') && !LEDGER_ROLES.has(user.role)) {
     return NextResponse.redirect(new URL('/select?reason=ledger-restricted', req.url));

@@ -720,7 +720,7 @@ export class AuthService {
       try {
         tenant = await this.prisma.tenant.findUnique({
           where:  { id: tenantId },
-          select: { name: true, taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, allowSelfClockIn: true, returnsOwnerOnly: true, ledgerMode: true, country: true, currency: true, timezone: true },
+          select: { name: true, taxStatus: true, isVatRegistered: true, isBirRegistered: true, tinNumber: true, businessName: true, registeredAddress: true, isPtuHolder: true, ptuNumber: true, minNumber: true, tier: true, aiAddonType: true, aiAddonExpiresAt: true, aiQuotaOverride: true, planCode: true, businessType: true, modulePos: true, moduleLedger: true, modulePayroll: true, receiptHeaderNote: true, receiptFooterNote: true, allowSelfClockIn: true, returnsOwnerOnly: true, ledgerMode: true, country: true, currency: true, timezone: true },
         });
       } catch (err: any) {
         // PrismaClientValidationError or P2022 (column doesn't exist) means
@@ -800,6 +800,8 @@ export class AuthService {
       modulePos:         tenant?.modulePos ?? true,
       moduleLedger:      tenant?.moduleLedger ?? true,
       modulePayroll:     tenant?.modulePayroll ?? true,
+      // Which apps a shop type sees (Clerque Inventory shows at retail shops first).
+      businessType:      tenant?.businessType ?? null,
       // normalizePlanCode absorbs legacy rows (SUITE_T2, the long-deleted
       // STD_* codes) so a stale value can never mint a token with undefined
       // planFeatures — which used to lock every gated feature in the UI.

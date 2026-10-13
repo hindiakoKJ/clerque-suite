@@ -35,6 +35,18 @@ interface PaymentModalProps {
    * customer holding out a ₱500 note. Better to never offer cash at all.
    */
   canTakeCash?: boolean;
+  /**
+   * A sale with a tagged part (Clerque Inventory): personal GCash/Maya are
+   * refused by the server, so the GCash and PayMaya tabs take the shop's
+   * business wallet and Split does not offer the personal ones.
+   */
+  businessWalletsOnly?: boolean;
+  /**
+   * An engine, half-cut or frame piece: the buyer's name and address go on
+   * the sale (the server refuses it without them), so the fields open by
+   * themselves and Charge waits for them.
+   */
+  buyerRequired?: boolean;
   onConfirm: (payments: PaymentEntry[], b2b?: B2bOrderInfo) => Promise<void>;
   onClose: () => void;
 }
@@ -78,7 +90,7 @@ function methodToTab(m: PaymentMethod): TabKey {
   return 'CARD';
 }
 
-export function PaymentModal({ open, total, isOffline, canTakeCash = true, onConfirm, onClose }: PaymentModalProps) {
+export function PaymentModal({ open, total, isOffline, canTakeCash = true, businessWalletsOnly = false, buyerRequired = false, onConfirm, onClose }: PaymentModalProps) {
   const [payments, setPayments] = useState<PaymentEntry[]>([]);
   const [method, setMethod] = useState<PaymentMethod>('CASH');
   const [tab, setTab] = useState<TabKey>('CASH');
@@ -113,7 +125,8 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
     at all, which is the honest answer rather than one that fails at Charge.
   */
   const activeMethods = (isOffline ? METHODS.filter((m) => m.value === 'CASH') : METHODS)
-    .filter((m) => canTakeCash || m.value !== 'CASH');
+    .filter((m) => canTakeCash || m.value !== 'CASH')
+    .filter((m) => !businessWalletsOnly || (m.value !== 'GCASH_PERSONAL' && m.value !== 'MAYA_PERSONAL'));
   const activeMethod = activeMethods.find((m) => m.value === method) ?? activeMethods[0]!;
 
   // For the cash keypad: live "bayad" preview is amountStr; sukli = bayad - total
@@ -130,7 +143,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
       setAmountStr('');
       setReference('');
       setError('');
-      setShowB2b(false);
+      setShowB2b(buyerRequired);
       setInvoiceType('CASH_SALE');
       setCustomerName('');
       setCustomerTin('');
@@ -171,7 +184,13 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
   function chooseTab(next: TabKey) {
     if (isOffline && next !== 'CASH' && next !== 'SPLIT') return;
     setTab(next);
-    setMethod(tabToMethod(next));
+    const picked = tabToMethod(next);
+    // A tagged sale takes the shop's business wallet, never a personal one.
+    setMethod(
+      businessWalletsOnly && picked === 'GCASH_PERSONAL' ? 'GCASH_BUSINESS'
+        : businessWalletsOnly && picked === 'MAYA_PERSONAL' ? 'MAYA_BUSINESS'
+          : picked,
+    );
     setError('');
     setAmountStr('');
     setReference('');
@@ -251,10 +270,15 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
 
     const totalTendered = finalPayments.reduce((s, p) => s + p.amount, 0);
     if (totalTendered < total - 0.001) { setError('Total payment must cover the amount due.'); return; }
+    if (buyerRequired && (!customerName.trim() || !customerAddress.trim())) {
+      setShowB2b(true);
+      setError('An engine, half-cut or frame piece needs the buyer\'s name and address. Type them below.');
+      return;
+    }
 
     setLoading(true);
     try {
-      const b2b: B2bOrderInfo | undefined = showB2b
+      const b2b: B2bOrderInfo | undefined = showB2b || buyerRequired
         ? {
             invoiceType,
             customerName:    customerName.trim() || undefined,
@@ -487,12 +511,12 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, onCon
             <div className="mt-6 border border-border rounded-xl overflow-hidden bg-card shadow-md">
               <button
                 type="button"
-                onClick={() => { setShowB2b((v) => !v); setInvoiceType(!showB2b ? 'CHARGE' : 'CASH_SALE'); }}
+                onClick={() => { setShowB2b((v) => !v); setInvoiceType(!showB2b && !buyerRequired ? 'CHARGE' : 'CASH_SALE'); }}
                 className="w-full flex items-center justify-between px-4 py-3 bg-muted hover:bg-secondary transition-colors"
               >
                 <span className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
                   <Building2 className="h-3.5 w-3.5" />
-                  Corporate / B2B Invoice (optional)
+                  {buyerRequired ? 'Buyer\'s name and address (needed for this part)' : 'Corporate / B2B Invoice (optional)'}
                 </span>
                 {showB2b ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               </button>

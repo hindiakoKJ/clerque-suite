@@ -10,7 +10,7 @@ const { restrictedMessage, RESTRICTED_REASONS } = await import('./restricted-rea
 
 describe('restrictedMessage: why someone landed on the app picker', () => {
   test('every reason the edge guard can send has a message (Procure had none)', () => {
-    for (const reason of ['pos-restricted', 'procure-restricted', 'ledger-restricted']) {
+    for (const reason of ['pos-restricted', 'procure-restricted', 'ledger-restricted', 'inventory-restricted']) {
       assert.ok(restrictedMessage(reason), reason);
     }
   });

@@ -1,5 +1,5 @@
 'use client';
-import { ShoppingCart, BookOpen, Users, ShieldCheck, ShoppingBasket } from 'lucide-react';
+import { ShoppingCart, BookOpen, Users, ShieldCheck, ShoppingBasket, Boxes } from 'lucide-react';
 import type { AccessLevel } from '@repo/shared-types';
 import { canEnterApp } from './app-roles';
 
@@ -14,7 +14,7 @@ import { canEnterApp } from './app-roles';
  */
 
 export interface AppCard {
-  id: 'pos' | 'ledger' | 'payroll' | 'procure';
+  id: 'pos' | 'ledger' | 'payroll' | 'procure' | 'inventory';
   name: string;
   description: string;
   Icon: React.ElementType;
@@ -60,6 +60,17 @@ export const APPS: AppCard[] = [
     route: '/procure',
     // Unused for Procure -- it is gated on role, not on an AppAccess row. See
     // accessibleApps below.
+    minLevel: 'NONE',
+  },
+  {
+    id: 'inventory',
+    name: 'Inventory',
+    description: 'What you have: tagged parts, photos, labels and counts.',
+    Icon: Boxes,
+    accent: 'hsl(142 60% 34%)',
+    accentDark: 'hsl(142 55% 45%)',
+    route: '/inventory',
+    // Unused, as for Procure: gated on role, not on an AppAccess row.
     minLevel: 'NONE',
   },
   {
@@ -119,6 +130,17 @@ interface AppUser {
   modulePos?:     boolean;
   moduleLedger?:  boolean;
   modulePayroll?: boolean;
+  businessType?:  string | null;
+}
+
+/**
+ * Clerque Inventory shows at retail shops first: tagged one-of-a-kind parts
+ * (tasks/inventory-and-mobile-plan.md, Phase 1). Cafes keep today's apps until
+ * their own Inventory screens arrive after Carolina's go-live (Phase 5). An
+ * older sign-in without the shop type shows nothing new until it refreshes.
+ */
+export function inventoryShownFor(businessType: string | null | undefined): boolean {
+  return businessType === 'RETAIL';
 }
 
 /**
@@ -155,6 +177,8 @@ export function accessibleApps(
       // PROCURE row, and there is no tenant flag for it, so both gates
       // would fail for a card that should simply be there.
       if (app.id === 'procure') return canEnterApp('procure', user.role);
+      // Inventory likewise: no AppAccess row and no tenant flag exist for it.
+      if (app.id === 'inventory') return canEnterApp('inventory', user.role) && inventoryShownFor(user.businessType);
       const code = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
       // First gate: tenant plan must include the module.
       if (!moduleEnabled(code)) return false;
@@ -169,6 +193,7 @@ export function accessibleApps(
     .map((app) => {
       if (app.name === 'Console') return { ...app, resolvedRoute: app.route };
       if (app.id === 'procure')   return { ...app, resolvedRoute: app.route };
+      if (app.id === 'inventory') return { ...app, resolvedRoute: app.route };
       const code  = app.id.toUpperCase() as 'POS' | 'LEDGER' | 'PAYROLL';
       const level = user.appAccess.find((a) => a.app === code)?.level;
       return { ...app, resolvedRoute: routeForApp(app, level, user.role) };
@@ -181,6 +206,7 @@ export function appForPath(pathname: string): AppCardWithRoute['name'] | null {
   if (pathname.startsWith('/pos'))     return 'Counter';
   if (pathname.startsWith('/ledger'))  return 'Ledger';
   if (pathname.startsWith('/procure')) return 'Procure';
+  if (pathname.startsWith('/inventory')) return 'Inventory';
   if (pathname.startsWith('/payroll')) return 'Sync';
   return null;
 }

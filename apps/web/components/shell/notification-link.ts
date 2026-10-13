@@ -15,7 +15,7 @@
  */
 import { canEnterApp } from '../../lib/app-roles';
 
-export type LinkApp = 'pos' | 'ledger' | 'procure' | 'payroll';
+export type LinkApp = 'pos' | 'ledger' | 'procure' | 'inventory' | 'payroll';
 
 /** The app a link points into, or null for links outside the four apps (Settings, an external page). */
 export function appForLink(link: string | null | undefined): LinkApp | null {
@@ -25,6 +25,7 @@ export function appForLink(link: string | null | undefined): LinkApp | null {
   if (inside('/pos'))     return 'pos';
   if (inside('/ledger'))  return 'ledger';
   if (inside('/procure')) return 'procure';
+  if (inside('/inventory')) return 'inventory';
   if (inside('/payroll')) return 'payroll';
   return null;
 }

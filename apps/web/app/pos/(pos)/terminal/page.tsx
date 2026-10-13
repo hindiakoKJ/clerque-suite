@@ -1,7 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShoppingCart, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { v4 as uuidv4 } from 'uuid';
 import { ProductGrid } from '@/components/pos/ProductGrid';
@@ -25,6 +24,9 @@ import { afterOfflineSale } from '@/lib/pos/stock-ceiling';
 import { dispatchOrderToStations, toastDispatchSummary } from '@/lib/pos/printer-dispatch';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 import { RetailTerminal } from './RetailTerminal';
+import { MobileCart } from './MobileCart';
+import { tryTagCode } from '@/lib/inventory/till-tags';
+import { cleanCode, isTagCode, needsNamedBuyer } from '@/lib/inventory/tags';
 import { useCustomerDisplaySync } from '@/hooks/pos/useCustomerDisplaySync';
 import { publishCustomerDisplay, resetCustomerDisplay } from '@/lib/pos/customer-display-channel';
 import type { CachedProduct, CachedCategory } from '@/lib/pos/db';
@@ -49,6 +51,10 @@ export default function PosTerminal() {
   const activeBranchId = branchId ?? user?.branchId ?? '';
   const tenantId       = user?.tenantId ?? '';
   const cartCount      = lines.reduce((s, l) => s + l.quantity, 0);
+  // Clerque Inventory: a cart with a tagged part. Its sale must be online, on
+  // the shop's own wallets, and an engine, half-cut or frame piece names its buyer.
+  const hasTags        = lines.some((l) => !!l.serializedUnitId);
+  const buyerRequired  = lines.some((l) => !!l.serializedUnitId && needsNamedBuyer(l.product.sku));
 
   // Floor layout — used to split orders to station printers (kitchen / bar tickets).
   // Only F&B-tier coffee shops have non-empty stations; for everyone else this
@@ -151,29 +157,43 @@ export default function PosTerminal() {
   useBarcodeScanner({
     enabled: !showPayment && !showPwdSc && !showParked && !receiptData,
     onScan: (code) => {
-      const match = (products as CachedProduct[]).find((p) => p.barcode === code);
-      if (!match) {
-        playSound('error');
-        toast.error(`No product matches barcode ${code}`);
+      // A 6-digit label number is checked as a tag first (Clerque Inventory).
+      // Anything else, or a 6-digit code that is not a tag, is matched as today.
+      if (isTagCode(cleanCode(code))) {
+        void tryTagCode(code, activeBranchId, products as CachedProduct[]).then((r) => {
+          if (r.outcome === 'HANDLED') { playSound(r.added ? 'click' : 'error'); return; }
+          addScannedProduct(code, r.error);
+        });
         return;
       }
-      const stock = match as CachedProduct & {
-        maxProducible?: number | null;
-        limitedBy?: { name: string } | null;
-        canOversell?: boolean;
-      };
-      const added = addItem({
-        id: match.id, name: match.name, price: match.price, costPrice: match.costPrice, isVatable: match.isVatable, categoryId: match.categoryId,
-        maxProducible: stock.maxProducible,
-        limitedByName: stock.limitedBy?.name,
-        canOversell:   stock.canOversell,
-      });
-      // The store has already said why when it refused.
-      if (!added) { playSound('error'); return; }
-      playSound('click');
-      toast.success(`Added: ${match.name}`);
+      addScannedProduct(code);
     },
   });
+
+  /** Today's scan: the product whose barcode is exactly this code. */
+  function addScannedProduct(code: string, lookupError?: string) {
+    const match = (products as CachedProduct[]).find((p) => p.barcode === code);
+    if (!match) {
+      playSound('error');
+      toast.error(lookupError ?? `No product matches barcode ${code}`);
+      return;
+    }
+    const stock = match as CachedProduct & {
+      maxProducible?: number | null;
+      limitedBy?: { name: string } | null;
+      canOversell?: boolean;
+    };
+    const added = addItem({
+      id: match.id, name: match.name, price: match.price, costPrice: match.costPrice, isVatable: match.isVatable, categoryId: match.categoryId,
+      maxProducible: stock.maxProducible,
+      limitedByName: stock.limitedBy?.name,
+      canOversell:   stock.canOversell,
+    });
+    // The store has already said why when it refused.
+    if (!added) { playSound('error'); return; }
+    playSound('click');
+    toast.success(`Added: ${match.name}`);
+  }
 
   // ── Categories (write-through) ──────────────────────────────────────────
   const { data: categories = [] } = useQuery<CachedCategory[]>({
@@ -202,6 +222,13 @@ export default function PosTerminal() {
 
   // ── Checkout ────────────────────────────────────────────────────────────
   async function handleCheckout(payments: PaymentEntry[], b2b?: B2bOrderInfo) {
+    // A tagged part sells only online in Phase 1: the offline queue has no
+    // tags, and a part sold twice offline would only be found afterwards.
+    // Thrown, so the payment screen shows it and keeps the sale open.
+    if (hasTags && !isOnline) {
+      playSound('error');
+      throw new Error('A tagged part sells only while online. Connect, then press Charge again.');
+    }
     const total      = grandTotal();
     const vat        = vatAmount();
     const sub        = subtotal();
@@ -267,6 +294,8 @@ export default function PosTerminal() {
         prescriptionId: l.prescriptionId,
         attestPin:      l.attestPin,
         yellowRxSerial: l.yellowRxSerial,
+        // Clerque Inventory: the tag this line sells (quantity 1). Absent on every other line.
+        serializedUnitId: l.serializedUnitId,
       })),
       payments: bookedPayments,
       discounts: [
@@ -333,7 +362,8 @@ export default function PosTerminal() {
 
     const receiptBase = {
       lines: lines.map((l) => ({
-        productName: l.product.name,
+        // A tagged part prints its tag (and engine or chassis number), as the server's line notes do.
+        productName: l.tagNote ? `${l.product.name} · ${l.tagNote}` : l.product.name,
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         lineTotal: (l.unitPrice - l.itemDiscount) * l.quantity,
@@ -492,6 +522,12 @@ export default function PosTerminal() {
       const isNetworkError =
         (err as { code?: string })?.code === 'ERR_NETWORK' ||
         (err as { code?: string })?.code === 'ECONNABORTED';
+      if (isNetworkError && hasTags) {
+        // Never queued: the server may have sold the tag before the line
+        // dropped, and charging again would then be refused as "already sold".
+        playSound('error');
+        throw new Error('The connection dropped before Clerque answered, so this sale is not confirmed. Check Orders for it before charging again.');
+      }
       if (isNetworkError) {
         await saveOffline();
         playSound('warn');
@@ -523,11 +559,24 @@ export default function PosTerminal() {
   // ── Retail branch — scan-first, dense SKU table ─────────────────────────
   if (isRetail) {
     return (
-      <>
+      // `relative` holds the phone cart overlay, the same as the food-and-drink till below.
+      <div className="relative h-full">
         <RetailTerminal
           products={products}
           categories={categories}
           loading={loadingProducts}
+          branchId={activeBranchId}
+          onCheckout={() => setShowPayment(true)}
+          onApplyPwdSc={() => setShowPwdSc(true)}
+          onOpenParkedSales={() => setShowParked(true)}
+        />
+        {/* Below 1024 px the cart rail is hidden: the floating cart and its full-screen Charge take over. */}
+        <MobileCart
+          open={mobileCartOpen}
+          onOpen={() => setMobileCartOpen(true)}
+          onClose={() => setMobileCartOpen(false)}
+          cartCount={cartCount}
+          total={grandTotal()}
           onCheckout={() => setShowPayment(true)}
           onApplyPwdSc={() => setShowPwdSc(true)}
           onOpenParkedSales={() => setShowParked(true)}
@@ -537,13 +586,15 @@ export default function PosTerminal() {
           total={grandTotal()}
           isOffline={!isOnline}
           canTakeCash={!!activeShift}
+          businessWalletsOnly={hasTags}
+          buyerRequired={buyerRequired}
           onConfirm={handleCheckout}
           onClose={() => setShowPayment(false)}
         />
         <PwdScModal open={showPwdSc} onClose={() => setShowPwdSc(false)} />
         <ParkedSalesModal open={showParked} onClose={() => setShowParked(false)} />
         <ReceiptModal open={!!receiptData} data={receiptData} onClose={() => setReceiptData(null)} />
-      </>
+      </div>
     );
   }
 
@@ -614,42 +665,17 @@ export default function PosTerminal() {
         </div>
       </div>
 
-      {/* Mobile: full-screen cart overlay */}
-      {mobileCartOpen && (
-        <div className="lg:hidden absolute inset-0 z-30 flex flex-col bg-background">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-background shrink-0">
-            <h2 className="font-semibold text-foreground">Current Order</h2>
-            <button
-              onClick={() => setMobileCartOpen(false)}
-              className="p-2 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <CartPanel
-              onCheckout={() => setShowPayment(true)}
-              onApplyPwdSc={() => setShowPwdSc(true)}
-              onOpenParkedSales={() => setShowParked(true)}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Mobile floating cart button */}
-      {!mobileCartOpen && cartCount > 0 && (
-        <button
-          onClick={() => setMobileCartOpen(true)}
-          className="lg:hidden fixed bottom-6 right-4 z-20 flex items-center gap-2 hover:opacity-90 text-white rounded-2xl px-5 py-3.5 shadow-xl transition-all active:scale-95"
-          style={{ background: 'var(--accent)' }}
-        >
-          <ShoppingCart className="h-5 w-5" />
-          <span className="font-bold text-sm">{cartCount} item{cartCount > 1 ? 's' : ''}</span>
-          <span className="bg-white/20 rounded-lg px-2 py-0.5 text-sm font-bold">
-            ₱{grandTotal().toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </span>
-        </button>
-      )}
+      {/* Mobile: full-screen cart overlay and the floating cart button */}
+      <MobileCart
+        open={mobileCartOpen}
+        onOpen={() => setMobileCartOpen(true)}
+        onClose={() => setMobileCartOpen(false)}
+        cartCount={cartCount}
+        total={grandTotal()}
+        onCheckout={() => setShowPayment(true)}
+        onApplyPwdSc={() => setShowPwdSc(true)}
+        onOpenParkedSales={() => setShowParked(true)}
+      />
 
       <PaymentModal
         open={showPayment}
@@ -661,6 +687,9 @@ export default function PosTerminal() {
           in the first place.
         */
         canTakeCash={!!activeShift}
+        /* Both false unless a tag was scanned into this cart (Clerque Inventory). */
+        businessWalletsOnly={hasTags}
+        buyerRequired={buyerRequired}
         onConfirm={handleCheckout}
         onClose={() => setShowPayment(false)}
       />

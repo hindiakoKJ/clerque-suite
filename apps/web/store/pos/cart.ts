@@ -45,6 +45,8 @@ export interface CartProduct {
   /** The owner sells past the count (Settings) or recipe deduction is paused:
    *  the server will not refuse, so the till does not either. */
   canOversell?: boolean;
+  /** Set on tagged parts only: an ENG-, HC- or FRM- SKU needs the buyer's name and address. */
+  sku?: string;
 }
 
 export interface CartLine {
@@ -75,6 +77,26 @@ export interface CartLine {
   /** Sprint 19 — Yellow Rx serial number (DDB_S2 lines only). Captured in
    *  the RxAttestModal alongside the PIN. */
   yellowRxSerial?: string;
+  /**
+   * Clerque Inventory — the tag (SerializedUnit id) when this line is one
+   * tagged part sold by its label number. Such a line is always quantity 1;
+   * two tags of one product are two lines.
+   */
+  serializedUnitId?: string;
+  /** The tag's 6-digit label number, for the cart line ("Tag 000457"). Web only. */
+  tagNumber?: string;
+  /** The tag's first photo (an API path), shown small on the line. Web only. */
+  tagPhotoUrl?: string;
+  /** "Tag 000457 · Engine No. ..." for the on-screen receipt. Web only. */
+  tagNote?: string;
+}
+
+/** What the till knows about a tag when it puts it in the cart. */
+export interface CartTag {
+  id: string;
+  number: string;
+  photoUrl?: string;
+  note: string;
 }
 
 export interface CartDiscount {
@@ -159,6 +181,11 @@ interface CartState {
    * all of that product that can be made.
    */
   addItem: (product: CartProduct, variantId?: string, modifiers?: CartItemModifier[]) => boolean;
+  /**
+   * One tagged part, quantity 1, on its own line. Returns false, after telling
+   * the cashier why, when that tag is already in the cart.
+   */
+  addTagItem: (product: CartProduct, tag: CartTag) => boolean;
   removeItem: (lineKey: string) => void;
   updateQty: (lineKey: string, qty: number) => void;
   setItemDiscount: (lineKey: string, discount: number) => void;
@@ -287,6 +314,36 @@ export const useCartStore = create<CartState>()(
     return true;
   },
 
+  addTagItem: (product, tag) => {
+    // A tag is one physical piece: it is either in the cart or not.
+    if (get().lines.some((l) => l.serializedUnitId === tag.id)) {
+      toast.error(`Tag ${tag.number} is already in the cart.`);
+      return false;
+    }
+    // The tag id is in the key, so two tags of one product stay two lines.
+    const lineKey = [product.id, '', '', `tag:${tag.id}`].join('|');
+    const removed = discountsOff(get());
+    set((state) => ({
+      ...removed.patch,
+      lines: [
+        ...state.lines,
+        {
+          product,
+          lineKey,
+          quantity: 1,
+          unitPrice: product.price,
+          itemDiscount: 0,
+          serializedUnitId: tag.id,
+          tagNumber: tag.number,
+          tagPhotoUrl: tag.photoUrl,
+          tagNote: tag.note,
+        },
+      ],
+    }));
+    if (removed.message) toast.warning(removed.message);
+    return true;
+  },
+
   removeItem: (lineKey) => {
     const state = get();
     if (!state.lines.some((l) => l.lineKey === lineKey)) return;
@@ -331,6 +388,11 @@ export const useCartStore = create<CartState>()(
     const state = get();
     const line = state.lines.find((l) => l.lineKey === lineKey);
     if (!line || line.quantity === qty) return;
+    // A tagged part is one piece; another one has its own tag to scan.
+    if (line.serializedUnitId && qty > 1) {
+      toast.error(`Tag ${line.tagNumber} is one part. Scan the next part's tag to sell another.`);
+      return;
+    }
     // Going up is checked against what can be made; going down always works.
     if (qty > line.quantity) {
       const onOtherLines = unitsInCart(state.lines, line.product.id) - line.quantity;

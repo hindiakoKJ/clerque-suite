@@ -12,10 +12,13 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { Search, Plus, AlertTriangle, Phone } from 'lucide-react';
+import { toast } from 'sonner';
 import { CartPanel } from '@/components/pos/CartPanel';
 import { useCartStore, type CartProduct } from '@/store/pos/cart';
 import { useAuthStore } from '@/store/auth';
 import { cn, formatPeso } from '@/lib/utils';
+import { tryTagCode } from '@/lib/inventory/till-tags';
+import { cleanCode, isTagCode } from '@/lib/inventory/tags';
 import type { JwtPayload } from '@repo/shared-types';
 import type { CachedProduct, CachedCategory } from '@/lib/pos/db';
 
@@ -35,6 +38,8 @@ interface RetailTerminalProps {
   products: CachedProduct[];
   categories: CachedCategory[];
   loading?: boolean;
+  /** The till's branch, for the tag lookup (a tag sells only at its own branch). */
+  branchId?: string;
   onCheckout: () => void;
   onApplyPwdSc: () => void;
   onOpenParkedSales: () => void;
@@ -44,6 +49,7 @@ export function RetailTerminal({
   products,
   categories,
   loading,
+  branchId,
   onCheckout,
   onApplyPwdSc,
   onOpenParkedSales,
@@ -53,6 +59,8 @@ export function RetailTerminal({
   const [tingiMode, setTingiMode] = useState(false);
   const [customerPhone, setCustomerPhone] = useState('');
   const scanRef = useRef<HTMLInputElement>(null);
+  // One tag lookup at a time: a scanner's Enter must not add the same tag twice.
+  const lookingUp = useRef(false);
 
   const addItem = useCartStore((s) => s.addItem);
   const lines = useCartStore((s) => s.lines);
@@ -105,10 +113,39 @@ export function RetailTerminal({
     scanRef.current?.focus();
   }
 
-  // Recent scans = the last 8 added lines, dedup'd by product.
+  /**
+   * Enter in the scan box. A 6-digit code is checked as a tag first (Clerque
+   * Inventory); a tag goes in the cart on its own line, or the reason it
+   * cannot be sold is shown. Every other code, and a 6-digit code that is not
+   * a tag, adds the first match as it always did.
+   */
+  function handleEnter() {
+    const typed = scan;
+    const fallback = filtered[0];
+    if (!isTagCode(cleanCode(typed))) {
+      if (fallback) handleAdd(fallback);
+      return;
+    }
+    if (lookingUp.current) return;
+    lookingUp.current = true;
+    void tryTagCode(typed, branchId, productsR).then((r) => {
+      lookingUp.current = false;
+      if (r.outcome === 'HANDLED') {
+        setScan('');
+        scanRef.current?.focus();
+        return;
+      }
+      if (fallback) handleAdd(fallback);
+      else if (r.error) toast.error(r.error);
+    });
+  }
+
+  // Recent scans = the last 8 added lines, dedup'd by product. Tag lines are
+  // left out: a tagged part is sold by scanning its own number, not by tapping.
   const recentScans: RetailProduct[] = [];
   const seen = new Set<string>();
   for (let i = lines.length - 1; i >= 0 && recentScans.length < 8; i--) {
+    if (lines[i].serializedUnitId) continue;
     const pid = lines[i].product.id;
     if (seen.has(pid)) continue;
     seen.add(pid);
@@ -119,11 +156,11 @@ export function RetailTerminal({
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Hero scan + tingi */}
-      <div className="px-6 py-4 bg-secondary border-b border-border shrink-0">
+      <div className="px-3 py-3 sm:px-6 sm:py-4 bg-secondary border-b border-border shrink-0">
         <div className="grid grid-cols-[1fr_auto] gap-3">
           <label
             className={cn(
-              'flex items-center gap-4 bg-card border-2 rounded-2xl px-5 py-3 transition-shadow',
+              'flex items-center gap-3 sm:gap-4 bg-card border-2 rounded-2xl px-3 py-2.5 sm:px-5 sm:py-3 transition-shadow',
               'border-[var(--accent)] shadow-[0_0_0_5px_rgba(59,130,246,0.15)]',
             )}
           >
@@ -137,9 +174,7 @@ export function RetailTerminal({
                 value={scan}
                 onChange={(e) => setScan(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && filtered.length > 0) {
-                    handleAdd(filtered[0]);
-                  }
+                  if (e.key === 'Enter') handleEnter();
                 }}
                 placeholder="SKU, barcode, or name"
                 className="w-full bg-transparent border-0 outline-none font-mono-counter text-xl font-semibold text-foreground mt-0.5 placeholder:text-muted-foreground/50"
@@ -147,7 +182,7 @@ export function RetailTerminal({
               />
             </div>
             <span
-              className="inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-md"
+              className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-md"
               style={{
                 background: 'var(--counter-success-soft, #D7F4E7)',
                 color: 'var(--counter-success-deep, #065F46)',
@@ -163,7 +198,8 @@ export function RetailTerminal({
           <button
             onClick={() => setTingiMode((v) => !v)}
             className={cn(
-              'min-h-[64px] px-6 rounded-2xl font-semibold text-sm border transition-colors',
+              // Hidden on a phone, where the scan box needs the width.
+              'hidden sm:block min-h-[64px] px-6 rounded-2xl font-semibold text-sm border transition-colors',
               tingiMode
                 ? 'text-white shadow-sm border-transparent'
                 : 'bg-card text-foreground border-border hover:bg-secondary',
@@ -178,7 +214,8 @@ export function RetailTerminal({
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left: catalog */}
-        <div className="flex-1 min-w-0 overflow-y-auto px-6 py-5 space-y-5">
+        {/* pb-24 below lg keeps the last row clear of the floating cart button. */}
+        <div className="flex-1 min-w-0 overflow-y-auto px-3 pt-4 pb-24 sm:px-6 sm:pt-5 lg:pb-5 space-y-5">
           {/* Recent scans */}
           {recentScans.length > 0 && (
             <div>
@@ -228,13 +265,13 @@ export function RetailTerminal({
             </div>
             <div className="bg-card border border-border rounded-xl overflow-hidden">
               {/* Header row */}
+              {/* On a phone: product, price, add. SKU and stock come back from 640 px. */}
               <div
-                className="grid items-center px-4 py-2.5 bg-secondary border-b border-border text-[10px] font-bold uppercase tracking-wider text-muted-foreground"
-                style={{ gridTemplateColumns: '110px 1fr 90px 100px 80px' }}
+                className="grid grid-cols-[1fr_88px_56px] sm:grid-cols-[110px_1fr_90px_100px_80px] items-center px-4 py-2.5 bg-secondary border-b border-border text-[10px] font-bold uppercase tracking-wider text-muted-foreground"
               >
-                <span>SKU</span>
+                <span className="hidden sm:block">SKU</span>
                 <span>Product</span>
-                <span className="text-right">Stock</span>
+                <span className="hidden sm:block text-right">Stock</span>
                 <span className="text-right">Price</span>
                 <span />
               </div>
@@ -252,12 +289,12 @@ export function RetailTerminal({
                     <div
                       key={p.id}
                       className={cn(
-                        'grid items-center px-4 gap-3 border-b border-border last:border-b-0 text-sm transition-colors',
+                        'grid grid-cols-[1fr_88px_56px] sm:grid-cols-[110px_1fr_90px_100px_80px] items-center px-4 gap-3 border-b border-border last:border-b-0 text-sm transition-colors',
                         isOut ? 'opacity-60' : 'hover:bg-secondary/40',
                       )}
-                      style={{ gridTemplateColumns: '110px 1fr 90px 100px 80px', minHeight: 56 }}
+                      style={{ minHeight: 56 }}
                     >
-                      <span className="font-mono-counter text-[11px] text-muted-foreground truncate">
+                      <span className="hidden sm:block font-mono-counter text-[11px] text-muted-foreground truncate">
                         {p.sku ?? p.barcode ?? '—'}
                       </span>
                       <span className="flex items-center gap-2 min-w-0">
@@ -276,7 +313,7 @@ export function RetailTerminal({
                       </span>
                       <span
                         className={cn(
-                          'text-right tnum text-xs font-semibold',
+                          'hidden sm:block text-right tnum text-xs font-semibold',
                           isLow ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground',
                         )}
                       >

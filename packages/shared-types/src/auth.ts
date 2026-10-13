@@ -248,6 +248,8 @@ export interface JwtPayload {
   modulePos?:     boolean;
   moduleLedger?:  boolean;
   modulePayroll?: boolean;
+  /** The shop type (Tenant.businessType). Decides which apps the launcher offers; absent on tokens minted before it was added. */
+  businessType?:  string | null;
   /** Authoritative plan code; drives per-plan staff cap + module checks. */
   planCode?:      import('./plans').PlanCode;
   /**

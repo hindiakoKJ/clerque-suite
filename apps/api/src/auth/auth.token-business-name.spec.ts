@@ -60,3 +60,41 @@ describe('AuthService.login — businessName in the token falls back to the tena
     expect(payload.businessName).toBe('Cafe Carolina');
   });
 });
+
+describe('AuthService.login — the shop type rides in the token', () => {
+  // The launcher offers Clerque Inventory by shop type (retail first), so the
+  // token carries it; a cafe's staff see no new card before their go-live.
+  async function payloadFor(businessType: string | undefined) {
+    const prisma: any = {
+      userSession:   { updateMany: jest.fn().mockResolvedValue({ count: 0 }), create: jest.fn().mockResolvedValue({}) },
+      userAppAccess: { findMany: jest.fn().mockResolvedValue([]) },
+      tenant:        { findUnique: jest.fn().mockResolvedValue({ taxStatus: 'NON_VAT', planCode: 'CLERQUE', name: 'Shop', businessType }) },
+      user:          { findUnique: jest.fn().mockResolvedValue({ personaKey: null, customPermissions: [] }) },
+      loginLog:      { create: jest.fn().mockResolvedValue({}) },
+    };
+    const jwt = { sign: jest.fn().mockReturnValue('signed'), verify: jest.fn(), decode: jest.fn() };
+    const { MailService } = await import('../mail/mail.service');
+    const { AccountsService } = await import('../accounting/accounts.service');
+    const moduleRef: TestingModule = await Test.createTestingModule({
+      providers: [
+        AuthService,
+        { provide: PrismaService,   useValue: prisma },
+        { provide: JwtService,      useValue: jwt },
+        { provide: MailService,     useValue: {} },
+        { provide: AccountsService, useValue: {} },
+      ],
+    }).compile();
+    await moduleRef.get(AuthService).login('user-1', 'tenant-1', 'branch-1', 'CASHIER', 'Maria');
+    return { payload: jwt.sign.mock.calls[0][0], select: prisma.tenant.findUnique.mock.calls[0][0].select };
+  }
+
+  it('reads the shop type and puts it in the token', async () => {
+    const { payload, select } = await payloadFor('RETAIL');
+    expect(select).toMatchObject({ businessType: true });
+    expect(payload.businessType).toBe('RETAIL');
+  });
+
+  it('a cafe is a cafe', async () => {
+    expect((await payloadFor('COFFEE_SHOP')).payload.businessType).toBe('COFFEE_SHOP');
+  });
+});

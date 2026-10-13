@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { DIALOG_FIT_SCROLL } from './dialog-fit';
 import { ManualDiscountModal } from '@/components/pos/ManualDiscountModal';
 import { RxAttestModal } from '@/components/pos/RxAttestModal';
+import { TagPhoto } from '@/components/inventory/TagPhoto';
 import { toast } from 'sonner';
 
 /** Roles allowed to apply manual discounts. Mirrors PERMISSION_MATRIX entry for order:apply_discount. */
@@ -118,6 +119,17 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">{line.product.name}</p>
+                    {/* A tagged part: its photo and number, so the cashier can match them to the part in hand. */}
+                    {line.serializedUnitId && (
+                      <div className="mt-1 flex items-center gap-2">
+                        {line.tagPhotoUrl && (
+                          <TagPhoto url={line.tagPhotoUrl} alt={`Tag ${line.tagNumber}`} className="h-10 w-10 shrink-0 rounded-md" />
+                        )}
+                        <span className="font-mono text-xs font-bold text-foreground bg-muted px-1.5 py-0.5 rounded">
+                          Tag {line.tagNumber}
+                        </span>
+                      </div>
+                    )}
                     {line.modifiers && line.modifiers.length > 0 && (
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {line.modifiers.map((m) => m.optionName).join(', ')}
@@ -166,13 +178,16 @@ export function CartPanel({ onCheckout, onApplyPwdSc, onOpenParkedSales }: CartP
                       <Minus className="h-4 w-4" />
                     </button>
                     <span className="text-base font-semibold w-8 text-center text-foreground tabular-nums">{line.quantity}</span>
-                    <button
-                      onClick={() => updateQty(line.lineKey, line.quantity + 1)}
-                      aria-label="Increase quantity"
-                      className="h-10 w-10 rounded-lg border border-border bg-background text-foreground flex items-center justify-center hover:bg-accent/10 active:scale-95 transition-all"
-                    >
-                      <Plus className="h-4 w-4" />
-                    </button>
+                    {/* A tagged part is one piece: no "+". "-" takes it off the cart. */}
+                    {!line.serializedUnitId && (
+                      <button
+                        onClick={() => updateQty(line.lineKey, line.quantity + 1)}
+                        aria-label="Increase quantity"
+                        className="h-10 w-10 rounded-lg border border-border bg-background text-foreground flex items-center justify-center hover:bg-accent/10 active:scale-95 transition-all"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </button>
+                    )}
                   </div>
                   <span className="text-sm font-bold text-foreground tnum">
                     {formatPeso((line.unitPrice - line.itemDiscount) * line.quantity)}

@@ -41,6 +41,28 @@ interface Draft {
 
 const EMPTY: Draft = { branchId: '', productId: '', serialNumber: '', acquiredCost: '', conditionNotes: '' };
 
+/**
+ * A tag (Clerque Inventory) keeps its engine/chassis number and notes as JSON
+ * in conditionNotes; a rental unit keeps plain text. Show either in words.
+ */
+function readableNotes(notes: string | null): string {
+  if (!notes) return '—';
+  try {
+    const v = JSON.parse(notes) as { engineNumber?: string | null; chassisNumber?: string | null; notes?: string | null };
+    if (v && typeof v === 'object') {
+      const parts = [
+        v.engineNumber ? `Engine No. ${v.engineNumber}` : null,
+        v.chassisNumber ? `Chassis No. ${v.chassisNumber}` : null,
+        v.notes || null,
+      ].filter(Boolean);
+      return parts.length ? parts.join(' · ') : '—';
+    }
+  } catch {
+    /* plain text */
+  }
+  return notes;
+}
+
 export default function SerializedUnitsPage() {
   const qc = useQueryClient();
   const user = useAuthStore((s) => s.user);
@@ -167,9 +189,9 @@ export default function SerializedUnitsPage() {
                   <td className="p-2">{u.product.name}</td>
                   <td className="p-2 text-xs">{u.branch.name}</td>
                   <td className="p-2 text-right font-mono text-xs">
-                    {u.acquiredCost != null ? formatPeso(Math.round(Number(u.acquiredCost) * 100)) : '—'}
+                    {u.acquiredCost != null ? formatPeso(Number(u.acquiredCost)) : '—'}
                   </td>
-                  <td className="p-2 text-xs italic text-gray-500">{u.conditionNotes ?? '—'}</td>
+                  <td className="p-2 text-xs italic text-gray-500">{readableNotes(u.conditionNotes)}</td>
                   <td className="p-2">
                     <span className={`text-[10px] font-bold uppercase tracking-wider rounded px-1.5 py-0.5 ${
                       u.status === 'IN_STOCK'  ? 'bg-green-100 text-green-800' :

@@ -47,13 +47,26 @@ export const PROCURE_ROLES = new Set([
 ]);
 
 /**
+ * Inventory: tagged parts, their photos, the printed labels and the counts.
+ * The people who tag a part as it comes in (in a small shop the seller is also
+ * the receiver, so cashiers too) and the owner and managers who cost it and
+ * print the labels. Pages inside are narrowed further by the Inventory layout,
+ * matching the tag API's own role lists (tasks/inventory-phase1-api.md).
+ */
+export const INVENTORY_ROLES = new Set([
+  'BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM',
+  'CASHIER', 'WAREHOUSE_STAFF', 'SALES_LEAD',
+]);
+
+/**
  * Sync (/payroll) is unrestricted by role — every employee uses it for
  * self-service (clock-in, payslips, leave). Specific HR pages are gated
  * inside the layout.
  */
-export function canEnterApp(app: 'pos' | 'ledger' | 'procure' | 'payroll', role: string): boolean {
-  if (app === 'pos')     return POS_ROLES.has(role);
-  if (app === 'ledger')  return LEDGER_ROLES.has(role);
-  if (app === 'procure') return PROCURE_ROLES.has(role);
+export function canEnterApp(app: 'pos' | 'ledger' | 'procure' | 'inventory' | 'payroll', role: string): boolean {
+  if (app === 'pos')       return POS_ROLES.has(role);
+  if (app === 'ledger')    return LEDGER_ROLES.has(role);
+  if (app === 'procure')   return PROCURE_ROLES.has(role);
+  if (app === 'inventory') return INVENTORY_ROLES.has(role);
   return true;
 }

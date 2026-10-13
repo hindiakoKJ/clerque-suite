@@ -14,6 +14,7 @@ const APP_NAME = {
   'pos-restricted':     'Counter',
   'procure-restricted': 'Procure',
   'ledger-restricted':  'Ledger',
+  'inventory-restricted': 'Inventory',
 } as const;
 
 export type RestrictedReason = keyof typeof APP_NAME;

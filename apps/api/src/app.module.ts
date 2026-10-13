@@ -24,6 +24,7 @@ import { PreOrdersModule } from './pre-orders/pre-orders.module';
 import { CloseAndPlanModule } from './close-and-plan/close-and-plan.module';
 import { PriceListsModule } from './price-lists/price-lists.module';
 import { RentalsModule } from './rentals/rentals.module';
+import { TagsModule } from './tags/tags.module';
 import { FuelModule } from './fuel/fuel.module';
 import { SettlementModule } from './settlement/settlement.module';
 import { AccountingPeriodsModule } from './accounting-periods/accounting-periods.module';
@@ -126,6 +127,7 @@ import { throttleTracker } from './common/http/throttle-tracker';
     CloseAndPlanModule,
     PriceListsModule,
     RentalsModule,
+    TagsModule,
     FuelModule,
     SettlementModule,
     AccountingPeriodsModule,

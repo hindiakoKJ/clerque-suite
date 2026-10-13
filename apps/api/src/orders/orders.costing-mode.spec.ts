@@ -97,6 +97,7 @@ describe('OrdersService — costing mode vs inventory deduction', () => {
     };
 
     const prisma: any = {
+      serializedUnit: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       // The order carries a shiftId now — a POS cash sale needs a drawer to
       // put the money in — so the ownership check runs.
       shift: { count: jest.fn().mockResolvedValue(1), findFirst: jest.fn().mockResolvedValue({ cashierId: null, closedAt: null }) },

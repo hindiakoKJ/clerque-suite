@@ -25,6 +25,8 @@ import { OrderQuoteService } from './order-quote.service';
 import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 import { supervisorPinAttempts } from '../auth/pin-attempts';
 import { pricesBelowMenu, loadCatalog, type SoldLine } from './price-check';
+import { planTagSale, claimTags, releaseTag } from './tag-sale';
+import { tagNumberFromNote } from '../tags/tag-rules';
 
 /** Peso tolerance when comparing a caller's totals against our own. One
  *  centavo absorbs float noise without letting a real discrepancy through. */
@@ -648,6 +650,15 @@ export class OrdersService {
       }
     }
 
+    // Clerque Inventory: a tagged part sells once, by its number, at its own cost (tag-sale.ts).
+    const hasTagLines = payload.items.some((i) => !!i.serializedUnitId);
+    const tagPlan = await planTagSale(
+      this.prisma, tenantId, payload, !replayedOffline,
+      hasTagLines || (!replayedOffline && await this.shopUsesTags(tenantId)),
+    );
+    const tagCostById = new Map([...tagPlan.byIndex.values()].map((t) => [t.id, t.cost]));
+    let tagClashes: string[] = [];
+
     const order = await this.prisma.$transaction(async (tx) => {
       // Generate order number inside the transaction so the count is stable.
       // Relies on @@unique([tenantId, orderNumber]) as the final race guard.
@@ -767,6 +778,8 @@ export class OrdersService {
               dispensedByPrc: attestedByLine.get(idx)?.prc,
               dispensedById:  attestedByLine.get(idx)?.userId,
               yellowRxSerial: (item as any).yellowRxSerial,
+              // "Tag 000457 · Engine No. ..." -- printed on the receipt and the owner's alert.
+              notes: tagPlan.byIndex.get(idx)?.note,
               modifiers: item.modifiers?.length
                 ? {
                     create: item.modifiers.map((m) => ({
@@ -804,6 +817,9 @@ export class OrdersService {
         },
         include: { items: { include: { modifiers: true } }, payments: true, discounts: true },
       });
+
+      // Each tag moves to SOLD with this order, once (a live sale fails here if another phone sold it first).
+      tagClashes = await claimTags(tx, tenantId, order.id, tagPlan, !replayedOffline);
 
       // Update inventory per item using Prisma ORM (no raw SQL).
       // Read current stock → compute new quantity → write back inside the
@@ -1561,6 +1577,22 @@ export class OrdersService {
               // A waiting line books its cost when it is marked ready (usage-confirm.ts).
               .filter((i) => !waitingKeys.has(recipeKey(i.productId, i.variantId, optionIdsOf(i))))
               .map((i) => {
+                // 0. SPECIFIC -- a tagged part costs exactly what the owner costed that piece at.
+                const tagCost = i.serializedUnitId ? tagCostById.get(i.serializedUnitId) : undefined;
+                if (tagCost != null) {
+                  const tagQty = Number(i.quantity);
+                  const tagOverhead = overheadRate * tagQty;
+                  return {
+                    productId:  i.productId,
+                    lineKey:    `tag:${i.serializedUnitId}`,
+                    quantity:   i.quantity,
+                    unitCost:   tagCost,
+                    totalCost:  tagQty * tagCost + tagOverhead,
+                    directCost: tagQty * tagCost,
+                    overhead:   tagOverhead,
+                    costMethod: 'SPECIFIC',
+                  };
+                }
                 // Cost resolution precedence (most → least authoritative):
                 //   1. RECIPE     — sum of actual ingredient costs (FIFO lot
                 //                   drains or WAC running averages). True
@@ -1647,7 +1679,9 @@ export class OrdersService {
       // Per order line, by its recipe: a Regular and a Large of one product each get their own cost.
       const unitCostByKey = new Map(cogsLines.map((l) => [l.lineKey, l.unitCost]));
       for (const it of order.items ?? []) {
-        const unitCost = unitCostByKey.get(recipeKey(it.productId, it.variantId, (it.modifiers ?? []).map((m) => m.modifierOptionId)));
+        const tagNo = tagNumberFromNote(it.notes);
+        const unitCost = (tagNo ? tagPlan.costByNumber.get(tagNo) : undefined)
+          ?? unitCostByKey.get(recipeKey(it.productId, it.variantId, (it.modifiers ?? []).map((m) => m.modifierOptionId)));
         if (unitCost == null) continue;
         await tx.orderItem.update({
           where: { id: it.id },
@@ -1694,8 +1728,55 @@ export class OrdersService {
     void this.telegramAlerts?.saleConfirmed(tenantId, order.id);
     // Till sales only: an API caller's totals were already checked against the catalog above.
     if (channel === 'POS') void this.flagPricesBelowMenu(tenantId, order.id, order.orderNumber, cashierId, payload.items);
+    if (tagClashes.length) void this.flagTagsSoldTwice(tenantId, order.id, order.orderNumber, cashierId, tagClashes);
 
     return order;
+  }
+
+  private readonly tagUse = new Map<string, { uses: boolean; at: number }>();
+
+  /**
+   * Does this shop tag parts at all? Asked at most once a minute per shop, so
+   * a cafe's sale does not pay an extra round trip to the database for a rule
+   * that can never apply to it.
+   */
+  private async shopUsesTags(tenantId: string): Promise<boolean> {
+    const hit = this.tagUse.get(tenantId);
+    if (hit && Date.now() - hit.at < 60_000) return hit.uses;
+    const any = await this.prisma.serializedUnit.findFirst({ where: { tenantId }, select: { id: true } });
+    this.tagUse.set(tenantId, { uses: !!any, at: Date.now() });
+    return !!any;
+  }
+
+  /**
+   * A sale rung offline reached the server after its tag had already been
+   * sold: the sale is kept (it happened), and the owner is told which tags,
+   * so one of the two pieces can be found or the theft named.
+   */
+  private async flagTagsSoldTwice(
+    tenantId: string, orderId: string, orderNumber: string, cashierId: string | null, numbers: string[],
+  ): Promise<void> {
+    try {
+      const what = numbers.map((n) => `Tag ${n}`).join(', ');
+      await this.audit.log({
+        tenantId, action: 'SETTING_CHANGED', entityType: 'TAG_SOLD_TWICE', entityId: orderId,
+        after: { tags: numbers, orderNumber }, description: `${what} sold again on ${orderNumber} (rung offline)`,
+        performedBy: cashierId ?? undefined,
+      });
+      const owners = await this.prisma.user.findMany({ where: { tenantId, isActive: true, role: 'BUSINESS_OWNER' }, select: { id: true } });
+      if (owners.length) {
+        await this.prisma.notification.createMany({
+          data: owners.map((o) => ({
+            tenantId, userId: o.id, kind: 'WARNING' as const,
+            title: `Sold twice: ${what}`,
+            body: `${orderNumber} was rung offline and sold a tag that was already sold. Find the part, or check who sold it.`,
+            link: '/inventory',
+          })),
+        });
+      }
+    } catch (err) {
+      console.warn(`[orders] Tag clash alert failed for order ${orderId}: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   /**
@@ -1954,6 +2035,8 @@ export class OrdersService {
           restockedItemIds.add(item.id);
         }
       }
+      // A voided tag goes back on the shelf; the next count must find it there.
+      for (const item of items) await releaseTag(tx, tenantId, orderId, item.notes, true);
 
       /*
         What was made and is not coming back is waste. A line still waiting at
@@ -2267,6 +2350,8 @@ export class OrdersService {
           },
         });
       }
+      // A refunded tag: back on the shelf when it came back, written off when it did not.
+      await releaseTag(tx, tenantId, orderId, item.notes, actuallyRestocked);
 
       // Compute the COGS portion attributable to the refunded units, but
       // only when the items were physically restocked. Recipe items that

@@ -116,6 +116,7 @@ describe('OrdersService — ingredient substitution', () => {
     return {
       tx,
       prisma: {
+        serializedUnit: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
         order:  { findFirst: jest.fn().mockResolvedValue(null) },
         // The order carries a shiftId now — a POS cash sale needs a drawer to
         // put the money in — so the ownership check runs.

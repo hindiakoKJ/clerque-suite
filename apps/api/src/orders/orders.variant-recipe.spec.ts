@@ -94,6 +94,7 @@ describe('OrdersService.create — variant recipes', () => {
     };
 
     const prisma: any = {
+      serializedUnit: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       shift: { count: jest.fn().mockResolvedValue(1), findFirst: jest.fn().mockResolvedValue({ cashierId: null, closedAt: null }) },
       order: { findFirst: jest.fn().mockResolvedValue(null) },
       tenant: {

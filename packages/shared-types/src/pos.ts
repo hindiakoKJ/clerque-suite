@@ -66,6 +66,12 @@ export interface CartItem {
    * 4–32 chars (regional DDB serial formats vary).
    */
   yellowRxSerial?: string;
+  /**
+   * Clerque Inventory — the tag (SerializedUnit id) of a one-of-a-kind part
+   * sold by its printed label number. Quantity must be 1; the server sells
+   * the tag once and books its own cost (tasks/inventory-phase1-api.md).
+   */
+  serializedUnitId?: string;
 }
 
 export interface OfflineOrder {

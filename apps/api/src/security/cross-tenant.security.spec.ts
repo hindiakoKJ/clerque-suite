@@ -65,6 +65,7 @@ function makePrismaMock() {
   // findFirst; present-by-default like count below, no owner so any caller passes.
   const shiftFindFirst  = jest.fn().mockResolvedValue({ id: 'shift-1', cashierId: null, closedAt: null });
   return {
+    serializedUnit: { findFirst: jest.fn().mockResolvedValue(null), findMany: jest.fn().mockResolvedValue([]), groupBy: jest.fn().mockResolvedValue([]), updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     tenant:      { findUniqueOrThrow: jest.fn(), findUnique: jest.fn().mockResolvedValue({ valuationMethod: 'WAC' }) },
     order:       {
       findFirst:  orderFindFirst,

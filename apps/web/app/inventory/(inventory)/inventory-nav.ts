@@ -1,4 +1,4 @@
-import { House, Tag, ScanSearch, HandCoins, Printer, ListChecks } from 'lucide-react';
+import { House, Tag, ScanSearch, HandCoins, Printer, ListChecks, ClipboardCheck, Undo2 } from 'lucide-react';
 
 /**
  * The Inventory screens and who may open each, in one list the layout (nav and
@@ -46,6 +46,20 @@ export const INVENTORY_PAGES: InventoryPage[] = [
     title: 'Find a tag',
     desc: 'Type or scan a number to see the part, its photos and its price.',
     Icon: ScanSearch,
+    roles: TAG_ROLES,
+  },
+  {
+    href: '/inventory/return',
+    title: 'Return a part',
+    desc: 'A customer brought a part back? Scan its label first.',
+    Icon: Undo2,
+    roles: TAG_ROLES,
+  },
+  {
+    href: '/inventory/roll-call',
+    title: 'Roll call',
+    desc: 'Scan every tagged part on the shelves, then send the count.',
+    Icon: ClipboardCheck,
     roles: TAG_ROLES,
   },
   {

@@ -210,6 +210,41 @@ export function priceBelowMenuMessage(a: PriceAlert): string {
   return `${head.join('\n')}\n<pre>${escapeHtml(body.join('\n'))}</pre>\n<i>${escapeHtml(note)}</i>`;
 }
 
+// ── owner notice ───────────────────────────────────────────────────────────
+
+export interface OwnerNoticeForAlert {
+  shopName:   string;
+  branchName: string | null;
+  /** One line, in plain words: "Parts missing at the roll call". */
+  title:      string;
+  /** What to look at, one thing per line. */
+  lines:      string[];
+  at:         Date;
+}
+
+/**
+ * Something the owner should look at that is not a sale or a purchase: parts
+ * missing at a roll call, a part returned that was never sold. A bold title,
+ * the shop, the time, and the lines in a monospace block; lines that do not
+ * fit are counted in "…and N more".
+ */
+export function ownerNoticeMessage(n: OwnerNoticeForAlert): string {
+  const title = String(n.title ?? '').replace(/\s+/g, ' ').trim() || 'Notice';
+  const blocks = (n.lines ?? []).map((l) => clip(String(l ?? ''), 300));
+  const build = (shown: string[], more: number) => {
+    const body = [...shown];
+    if (more > 0) body.push(`…and ${more} more`);
+    const head = [
+      `⚠️ <b>${escapeHtml(clip(title, 200))}</b>`,
+      place(clip(n.shopName, 120), n.branchName ? clip(n.branchName, 80) : null),
+      escapeHtml(manilaTime(n.at)),
+    ];
+    // No empty block: Telegram shows an empty <pre> as a blank box.
+    return body.length > 0 ? `${head.join('\n')}\n<pre>${escapeHtml(body.join('\n'))}</pre>` : head.join('\n');
+  };
+  return fitItems(build, blocks, MESSAGE_LIMIT);
+}
+
 // ── buying ─────────────────────────────────────────────────────────────────
 
 export interface RequestForAlert {
@@ -544,4 +579,177 @@ export function dailyUsageMessage(u: UsageForAlert): string {
     return [...head, ...tail].join('\n');
   };
   return fitItems(build, blocks, MESSAGE_LIMIT);
+}
+
+// ── day close ──────────────────────────────────────────────────────────────
+
+/** Money owed, a void or a refund done by one person (or nobody recorded). */
+export interface ByPerson { name: string | null; count: number; amount: number }
+
+export interface CloseSummaryForAlert {
+  shopName:   string;
+  branchName: string | null;
+  /** The business day, YYYY-MM-DD, Manila. */
+  day:        string;
+  /** When it was read: the summary covers the day up to here. */
+  asOf:       Date;
+  sales: {
+    count: number;
+    total: number;
+    /** Raw PaymentMethod values, plus 'CHARGE' for sales on account. Merged into words here (GCash personal + business = GCash). */
+    byMethod: Array<{ method: string; amount: number }>;
+  };
+  /** Tagged parts on today's sales. `cost` is the line's own cost, null when none was recorded. */
+  tagged: Array<{ number: string | null; name: string; sold: number; cost: number | null; refunded: boolean }>;
+  discounts: {
+    total: number;
+    /** `name` null: no approver was recorded (a promo, a senior or PWD discount). */
+    byApprover: ByPerson[];
+    /** Senior and PWD discounts: one per card shown. */
+    seniorPwd: number;
+  };
+  voids:   { count: number; total: number; byPerson: ByPerson[] };
+  refunds: { count: number; total: number; byPerson: ByPerson[] };
+  /** Drawers closed today, in the order they closed. Nulls: closed without a count. */
+  drawers: Array<{ cashier: string | null; expected: number | null; counted: number | null; variance: number | null }>;
+  /** Sales today with a line under the menu price (orders/price-check). */
+  belowMenu: number;
+  /** A tag rung up on two sales (an offline till). */
+  soldTwice: Array<{ tags: string[]; orderNumber: string | null }>;
+  /** Roll calls done today, oldest first. */
+  rollCalls: Array<{ at: Date; missing: number }>;
+}
+
+/** The order the owner reads the ways of paying in; a method not listed here comes after, as it is named. */
+const CLOSE_METHOD_ORDER = ['Cash', 'GCash', 'Maya', 'QR Ph', 'Card', 'Charge'];
+
+function peso(n: number): string {
+  return n < 0 ? `-₱${money(-n)}` : `₱${money(n)}`;
+}
+
+function times(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** "Anne: 2, ₱450.00"; nobody recorded gets `nobody`. */
+function personLine(p: ByPerson, nobody: string): string {
+  return `${p.name ? clip(p.name, 60) : nobody}: ${p.count}, ${peso(p.amount)}`;
+}
+
+function drawerLine(d: CloseSummaryForAlert['drawers'][number]): string {
+  const who = d.cashier ? clip(d.cashier, 60) : 'A cashier no longer on staff';
+  if (d.counted == null || d.expected == null) return `${who}: closed without a count`;
+  const v = Math.round((d.variance ?? d.counted - d.expected) * 100) / 100;
+  const result = Math.abs(v) < 0.005 ? 'exact' : v < 0 ? `short ${peso(-v)}` : `over ${peso(v)}`;
+  return `${who}: expected ${peso(d.expected)}, counted ${peso(d.counted)}, ${result}`;
+}
+
+function taggedLine(t: CloseSummaryForAlert['tagged'][number], showCosts: boolean): string {
+  const what = `${t.number ? `Tag ${t.number} ` : ''}${clip(t.name, 60)}`;
+  const parts = [`sold ${peso(t.sold)}`];
+  if (!showCosts) {
+    // A part's cost is the owner's alone (the tag API shows it to no one else).
+  } else if (t.cost == null) {
+    parts.push('no cost recorded');
+  } else {
+    const margin = Math.round((t.sold - t.cost) * 100) / 100;
+    parts.push(`cost ${peso(t.cost)}`, margin < 0 ? `loss ${peso(-margin)}` : `margin ${peso(margin)}`);
+  }
+  if (t.refunded) parts.push('refunded');
+  return `${what}: ${parts.join(' · ')}`;
+}
+
+/** List caps tried in turn until the message fits: everything, then fewer and fewer of each list. */
+const CLOSE_LIST_CAPS = [Infinity, 50, 25, 10, 5, 3, 1, 0];
+
+/**
+ * The day's close, sent at 21:30 Manila to the owner and the branch's
+ * managers: what was sold and how it was paid, tagged parts (with their cost
+ * and margin for the owner only, `showCosts`), discounts and who approved them, voids and refunds, the
+ * drawers closed, and what the till flagged. A section with nothing in it is
+ * left out; a day with nothing at all says so in one line.
+ *
+ * Plain lines, not a 32-wide receipt: a tagged part's line carries three
+ * amounts and would wrap in a monospace block. Long lists keep their first
+ * entries and count the rest in "…and N more", so it always fits one message.
+ */
+export function closeSummaryMessage(s: CloseSummaryForAlert, opts: { showCosts?: boolean } = {}): string {
+  const showCosts = opts.showCosts ?? true;
+  const bold = (t: string) => `<b>${escapeHtml(t)}</b>`;
+  const item = (t: string) => `• ${escapeHtml(t)}`;
+  const list = (rows: string[], cap: number) => {
+    const shown = rows.slice(0, cap).map(item);
+    const more = rows.length - shown.length;
+    return more > 0 ? [...shown, escapeHtml(`…and ${more} more`)] : shown;
+  };
+
+  // Ways of paying, merged into the words the owner uses, in the owner's order.
+  const methods = new Map<string, number>();
+  for (const p of s.sales.byMethod) {
+    const w = p.method === 'CHARGE' ? 'Charge' : paymentWord(p.method);
+    methods.set(w, (methods.get(w) ?? 0) + p.amount);
+  }
+  const rank = (w: string) => { const i = CLOSE_METHOD_ORDER.indexOf(w); return i < 0 ? CLOSE_METHOD_ORDER.length : i; };
+  const methodRows = [...methods.entries()]
+    .filter(([, amount]) => Math.abs(amount) >= 0.005)
+    .sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]))
+    .map(([w, amount]) => `${w} ${peso(amount)}`);
+
+  const build = (cap: number) => {
+    const sections: string[][] = [];
+    if (s.sales.count > 0) {
+      sections.push([`${bold('Sales')}: ${escapeHtml(`${s.sales.count}, total ${peso(s.sales.total)}`)}`, ...methodRows.map(item)]);
+    }
+    if (s.tagged.length > 0) {
+      sections.push([bold('Tagged parts sold'), ...list(s.tagged.map((t) => taggedLine(t, showCosts)), cap)]);
+    }
+    if (s.discounts.byApprover.length > 0 || s.discounts.seniorPwd > 0) {
+      sections.push([
+        `${bold('Discounts')}: ${escapeHtml(peso(s.discounts.total))}`,
+        ...list(s.discounts.byApprover.map((p) => `${p.name ? `Approved by ${clip(p.name, 60)}` : 'No approver recorded'}: ${p.count}, ${peso(p.amount)}`), cap),
+        ...(s.discounts.seniorPwd > 0 ? [item(`Senior/PWD: ${s.discounts.seniorPwd}`)] : []),
+      ]);
+    }
+    const undone: string[] = [];
+    if (s.voids.count > 0) {
+      undone.push(`${bold('Voids')}: ${escapeHtml(`${s.voids.count}, total ${peso(s.voids.total)}`)}`,
+        ...list(s.voids.byPerson.map((p) => personLine(p, 'Not recorded')), cap));
+    }
+    if (s.refunds.count > 0) {
+      undone.push(`${bold('Refunds')}: ${escapeHtml(`${s.refunds.count}, total ${peso(s.refunds.total)}`)}`,
+        ...list(s.refunds.byPerson.map((p) => personLine(p, 'Not recorded')), cap));
+    }
+    if (undone.length > 0) sections.push(undone);
+    if (s.drawers.length > 0) {
+      sections.push([bold('Cash drawers closed'), ...list(s.drawers.map(drawerLine), cap)]);
+    }
+    const flags: string[] = [];
+    if (s.belowMenu > 0) flags.push(`⚠️ ${escapeHtml(`Sold below menu: ${times(s.belowMenu, 'sale')}`)}`);
+    if (s.soldTwice.length > 0) {
+      flags.push(`⚠️ ${bold('Tags sold twice')}`, ...list(s.soldTwice.map((t) => {
+        const tags = t.tags.length > 0 ? t.tags.map((n) => `Tag ${clip(n, 20)}`).join(', ') : 'A tag';
+        return t.orderNumber ? `${tags} on ${clip(t.orderNumber, 40)}` : tags;
+      }), cap));
+    }
+    if (s.rollCalls.length > 0) {
+      flags.push(bold('Roll call'), ...list(s.rollCalls.map((r) => `${manilaTime(r.at)}, missing: ${r.missing}`), cap));
+    }
+    if (flags.length > 0) sections.push(flags);
+
+    const head = [
+      `📊 ${bold(`Day close: ${manilaDayLabel(s.day)}`)}`,
+      place(clip(s.shopName, 120), s.branchName ? clip(s.branchName, 80) : null),
+      escapeHtml(`Up to ${manilaTime(s.asOf)}`),
+    ];
+    const body = sections.length > 0 ? sections.map((x) => x.join('\n')) : [escapeHtml('Nothing was recorded today: no sales, voids, refunds or drawers closed.')];
+    return [head.join('\n'), ...body].join('\n\n');
+  };
+
+  for (const cap of CLOSE_LIST_CAPS) {
+    const text = build(cap);
+    if (text.length <= MESSAGE_LIMIT) return text;
+  }
+  // Every list cut to its count and still too long (a shop name cannot do this; clip bounds it): cut at a line.
+  const text = build(0);
+  return text.slice(0, text.lastIndexOf('\n', MESSAGE_LIMIT));
 }

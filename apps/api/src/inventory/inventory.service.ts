@@ -1,8 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional, Logger } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';   // already a dependency — see import.service.ts
 import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
+import { AuditService } from '../audit/audit.service';
+import { supervisorPinAttempts } from '../auth/pin-attempts';
 import { Prisma, InventoryLogType } from '@prisma/client';
 import { AdjustStockDto } from './dto/adjust-stock.dto';
 import { SetThresholdDto } from './dto/set-threshold.dto';
@@ -115,8 +117,32 @@ export interface MarginAlert {
   lossEach: number;
 }
 
+/** The roles whose supervisor PIN can approve a product write-off (same as a POS void). */
+const WRITE_OFF_APPROVER_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'] as const;
+
+/** The supervisor who approved a product write-off with their PIN. */
+export interface WriteOffApprover { id: string; name: string; role: string }
+
+/**
+ * The Movement Log line for a product write-off: why, and who approved it.
+ * e.g. "Damaged / spoiled (DAMAGE) — approved by Maria Santos"
+ */
+export function writeOffLogReason(
+  reason: string | undefined,
+  reasonCode: string | undefined,
+  approver: WriteOffApprover,
+): string {
+  const said = reason?.trim();
+  const why =
+    said && reasonCode && said !== reasonCode ? `${said} (${reasonCode})`
+    : said || reasonCode || 'Write-off';
+  return `${why} — approved by ${approver.name}`;
+}
+
 @Injectable()
 export class InventoryService {
+  private readonly logger = new Logger(InventoryService.name);
+
   constructor(
     private prisma: PrismaService,
     private periods: AccountingPeriodsService,
@@ -126,6 +152,12 @@ export class InventoryService {
       provides it: SanityModule is global.
     */
     @Optional() private sanity?: CostSanityService,
+    /*
+      Optional for the same reason: the specs that build this service by hand
+      (and the testing modules that list only Prisma and the periods) keep
+      working. Nest always provides it: InventoryModule imports AuditModule.
+    */
+    @Optional() private audit?: AuditService,
   ) {}
 
   // ─── One-shot product transfer between branches (Sprint 19, owner) ─────
@@ -873,7 +905,7 @@ export class InventoryService {
   // ─── Adjust stock ─────────────────────────────────────────────────────────
 
   async adjust(tenantId: string, createdById: string, dto: AdjustStockDto) {
-    const { productId, branchId, quantity, type, reason, note, unitCost, paymentMethod } = dto;
+    const { productId, branchId, quantity, type, reason, note, unitCost, paymentMethod, reasonCode } = dto;
 
     // Verify product belongs to tenant
     const product = await this.prisma.product.findFirst({
@@ -894,8 +926,11 @@ export class InventoryService {
     // Rule: any negative adjustment ⇒ supervisor PIN attest REQUIRED
     //   from a user with VOID_DIRECT_ROLES.
     const isNegativeFlow = type === 'STOCK_OUT' || quantity < 0;
+    // Who approved the write-off. Kept here, not on the dto, so nothing a
+    // client sends in the body can stand in for it.
+    let approver: WriteOffApprover | null = null;
     if (isNegativeFlow) {
-      if (!dto.reasonCode) {
+      if (!reasonCode) {
         throw new BadRequestException(
           'SecAudit A3: negative inventory adjustments require a reasonCode (DAMAGE / THEFT / EXPIRY / COUNT_CORRECTION / SAMPLE / INTERNAL_USE / PROMO_GIVEAWAY / OTHER).',
         );
@@ -908,33 +943,7 @@ export class InventoryService {
           'SecAudit A3: negative inventory adjustments require a supervisorPin attest from a supervisor account.',
         );
       }
-      const supervisorRoles: Array<string> = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'SALES_LEAD'];
-      const supervisors = await this.prisma.user.findMany({
-        where: {
-          tenantId,
-          isActive: true,
-          role: { in: supervisorRoles as any },
-          supervisorPinHash: { not: null },
-        },
-        select: { id: true, supervisorPinHash: true, name: true, role: true },
-      });
-      let attestedBy: { id: string; name: string; role: string } | null = null;
-      for (const sup of supervisors) {
-        if (!sup.supervisorPinHash) continue;
-        if (await bcrypt.compare(dto.supervisorPin, sup.supervisorPinHash)) {
-          attestedBy = { id: sup.id, name: sup.name, role: sup.role };
-          break;
-        }
-      }
-      if (!attestedBy) {
-        throw new BadRequestException(
-          'SecAudit A3: supervisor PIN does not match any authorised attester.',
-        );
-      }
-      // Stash so the audit log + journal entry can record who attested.
-      (dto as any).__attestedById   = attestedBy.id;
-      (dto as any).__attestedByName = attestedBy.name;
-      (dto as any).__attestedByRole = attestedBy.role;
+      approver = await this.resolveWriteOffApprover(tenantId, dto.supervisorPin, createdById);
     }
 
     // SECURITY H10 — bound `unitCost` against `product.costPrice`. Without
@@ -967,7 +976,10 @@ export class InventoryService {
       }
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    // What the write-off's audit row needs from inside the transaction.
+    const writtenOff: { logId?: string; quantityBefore?: number; quantityAfter?: number; unitCost?: number; totalValue?: number } = {};
+
+    const result = await this.prisma.$transaction(async (tx) => {
       // Upsert inventory item
       const existing = await tx.inventoryItem.findUnique({
         where: { branchId_productId: { branchId, productId } },
@@ -976,6 +988,10 @@ export class InventoryService {
       const quantityBefore = existing ? Number(existing.quantity) : 0;
       const quantityAfter = quantityBefore + quantity;
       const oldAvgCost = existing?.avgCost ? Number(existing.avgCost) : null;
+      // What one unit on this shelf is worth right now (moving-average cost),
+      // read before a write-off to zero clears it. Null when no costed
+      // receipt has set one; 0 is a real figure (stock that cost nothing).
+      const shelfAvgCost = existing?.avgCost != null ? Number(existing.avgCost) : null;
 
       if (quantityAfter < 0) {
         throw new BadRequestException(
@@ -1016,8 +1032,9 @@ export class InventoryService {
         },
       });
 
-      // Create movement log
-      await tx.inventoryLog.create({
+      // Create movement log. A write-off's line says why and who approved
+      // it: `reason` is the column the Movement Log shows.
+      const log = await tx.inventoryLog.create({
         data: {
           tenantId,
           branchId,
@@ -1026,7 +1043,7 @@ export class InventoryService {
           quantity: new Prisma.Decimal(quantity),
           quantityBefore: new Prisma.Decimal(quantityBefore),
           quantityAfter: new Prisma.Decimal(quantityAfter),
-          reason,
+          reason: approver ? writeOffLogReason(reason, reasonCode, approver) : reason,
           note,
           createdById,
         },
@@ -1041,8 +1058,18 @@ export class InventoryService {
       // Positive receipts (STOCK_IN / INITIAL) are valued at what was
       // actually paid — the same unitCost that drives WAC above — falling
       // back to the product master costPrice when the operator didn't type
-      // one. Negative flows (stock-out / damage / recount) keep costPrice.
-      const effectiveUnitCost = quantity > 0 && unitCost != null ? unitCost : costPrice;
+      // one.
+      //
+      // Stock removed (write-off / stock-out / recount down) leaves the shelf
+      // at what the shelf is carried at: its moving-average cost, the same
+      // figure a sale relieves. Valuing it at the catalog costPrice instead
+      // took a different amount out of 1050 than the receipts had put in, so
+      // the inventory account drifted from the shelf with every write-off.
+      // costPrice only when no costed receipt has set an average yet.
+      const effectiveUnitCost =
+        quantity > 0 && unitCost != null ? unitCost
+        : quantity < 0 && shelfAvgCost != null ? shelfAvgCost
+        : costPrice;
       const totalValue = Math.round(Math.abs(quantity) * effectiveUnitCost * 100) / 100;
       await tx.accountingEvent.create({
         data: {
@@ -1058,8 +1085,23 @@ export class InventoryService {
             quantityBefore,
             quantityAfter,
             costPrice,
+            unitCost: effectiveUnitCost,   // what each unit was valued at
             totalValue,
             reason: reason ?? null,
+            // Why the stock left. The journal books a write-off by it:
+            // DAMAGE / EXPIRY → 5070 Spoilage & Waste, THEFT /
+            // COUNT_CORRECTION → 5060 Inventory Write-off, else 5010. Without
+            // it every product write-off landed in 5010 Cost of goods sold.
+            //
+            // Write-offs only. On stock coming IN the journal reads
+            // COUNT_CORRECTION as "credit 5060", and the Adjust Stock screen
+            // sends that code for "Initial count" — opening stock would book
+            // as invented profit instead of the owner's capital.
+            ...(approver && reasonCode ? { reasonCode } : {}),
+            // The supervisor who approved a write-off with their PIN.
+            ...(approver
+              ? { approvedById: approver.id, approvedByName: approver.name, approvedByRole: approver.role }
+              : {}),
             // Only included when the client sent one — absent ⇒ journal
             // handler defaults to OWNER_FUNDED (back-compat: the counter
             // mobile app doesn't send it).
@@ -1068,8 +1110,155 @@ export class InventoryService {
         },
       });
 
+      writtenOff.logId          = log?.id;
+      writtenOff.quantityBefore = quantityBefore;
+      writtenOff.quantityAfter  = quantityAfter;
+      writtenOff.unitCost       = effectiveUnitCost;
+      writtenOff.totalValue     = totalValue;
+
       return { ...item, quantity: Number(item.quantity) };
     });
+
+    if (approver) {
+      await this.auditWriteOff(tenantId, createdById, approver, {
+        productId,
+        productName: product.name,
+        branchId,
+        adjustmentType: type,
+        quantity,
+        reasonCode: reasonCode ?? null,
+        reason: reason ?? null,
+        ...writtenOff,
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * The supervisor standing behind a product write-off, from the PIN typed
+   * on the requester's screen.
+   *
+   * The same check a POS void or refund uses (OrdersService.resolveSupervisorByPin):
+   * the shop-wide wrong-PIN count from auth/pin-attempts (5 wrong in 15
+   * minutes, shared with the till, then even the right PIN waits), the
+   * requester can never be their own approver, and a PIN two supervisors
+   * share is refused rather than guessed at, so the trail never names the
+   * wrong person.
+   *
+   * Before this the write-off ran its own loop over the supervisors with no
+   * limit at all, and the person removing the stock could approve it with
+   * their own PIN.
+   */
+  private async resolveWriteOffApprover(
+    tenantId: string,
+    pin: string,
+    requesterId: string,
+  ): Promise<WriteOffApprover> {
+    const cleaned = (pin ?? '').trim();
+    if (!/^\d{4,6}$/.test(cleaned)) {
+      throw new ForbiddenException('Supervisor PIN must be 4-6 digits.');
+    }
+    // Counted before the PIN is checked, so a locked shop cannot still tell
+    // right from wrong (see PinAttempts.startTry).
+    const attempt = supervisorPinAttempts.startTry(tenantId);
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        tenantId,
+        isActive:          true,
+        role:              { in: [...WRITE_OFF_APPROVER_ROLES] as never },
+        supervisorPinHash: { not: null },
+        // The person removing the stock cannot approve it.
+        NOT:               { id: requesterId },
+      },
+      select: { id: true, name: true, role: true, supervisorPinHash: true },
+    });
+
+    const matches: WriteOffApprover[] = [];
+    for (const u of candidates) {
+      if (u.id === requesterId) continue;   // belt and braces: never self
+      if (u.supervisorPinHash && (await bcrypt.compare(cleaned, u.supervisorPinHash))) {
+        matches.push({ id: u.id, name: u.name, role: u.role });
+      }
+    }
+
+    if (matches.length === 0) {
+      /*
+        Their own PIN: say so, and do not count it as a wrong guess. It tells
+        them nothing they do not know, and without it an owner typing their
+        own PIN reads "not recognised" five times and locks every till in the
+        shop out of voids for 15 minutes.
+      */
+      const self = await this.prisma.user.findFirst({
+        where:  { id: requesterId, tenantId },
+        select: { supervisorPinHash: true },
+      });
+      if (self?.supervisorPinHash && (await bcrypt.compare(cleaned, self.supervisorPinHash))) {
+        attempt.notAGuess();
+        throw new ForbiddenException(
+          'You cannot approve your own write-off. Ask another supervisor to type their PIN.',
+        );
+      }
+      // A wrong PIN is already counted by startTry.
+      throw new ForbiddenException('Supervisor PIN not recognised.');
+    }
+    if (matches.length > 1) {
+      // Not a wrong guess: the PIN is right, just shared.
+      attempt.notAGuess();
+      throw new ForbiddenException(
+        'That PIN matches more than one supervisor. Have them change it, or sign in directly.',
+      );
+    }
+    attempt.succeeded();
+    return matches[0];
+  }
+
+  /**
+   * The audit row for a product write-off: what left the shelf, why, what it
+   * was worth, who asked and who approved. Written after the stock and the
+   * books have committed; if it fails the write-off stands (refusing now
+   * would only make the person send it twice) and the failure is logged.
+   */
+  private async auditWriteOff(
+    tenantId: string,
+    requestedById: string,
+    approver: WriteOffApprover,
+    detail: {
+      productId: string; productName: string; branchId: string; adjustmentType: string;
+      quantity: number; reasonCode: string | null; reason: string | null;
+      logId?: string; quantityBefore?: number; quantityAfter?: number; unitCost?: number; totalValue?: number;
+    },
+  ): Promise<void> {
+    if (!this.audit) {
+      this.logger.warn(`Write-off of ${detail.productName} not audit-logged: AuditService unavailable.`);
+      return;
+    }
+    try {
+      await this.audit.log({
+        tenantId,
+        // AuditAction has no write-off value and the enum cannot change
+        // without a migration; entityType says what this row is.
+        action:      'SETTING_CHANGED',
+        entityType:  'STOCK_WRITE_OFF',
+        entityId:    detail.logId ?? detail.productId,
+        after: {
+          ...detail,
+          requestedById,
+          approvedById:   approver.id,
+          approvedByName: approver.name,
+          approvedByRole: approver.role,
+        },
+        description:
+          `Stock write-off: ${Math.abs(detail.quantity)} x ${detail.productName}` +
+          ` (${detail.reasonCode ?? 'no reason code'}), approved by ${approver.name}`,
+        performedBy: requestedById,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Write-off of ${detail.productName} (log ${detail.logId ?? '?'}) committed but its audit row failed: ` +
+        (err instanceof Error ? err.message : String(err)),
+      );
+    }
   }
 
   // ─── Set low-stock threshold ──────────────────────────────────────────────

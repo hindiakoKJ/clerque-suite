@@ -450,7 +450,7 @@ export function ReceiptModal({ open, data, onClose, viewOnly = false }: ReceiptM
               <div className="flex items-center gap-2.5 mt-1.5">
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Paid
+                  {data.invoiceType === 'CHARGE' && data.payments.length === 0 ? 'On account' : 'Paid'}
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {auth.numberPrefix} # <span className="font-mono-counter tnum">{data.orderNumber}</span> · {date.toLocaleDateString('en-PH')} · {date.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' })}
@@ -656,6 +656,13 @@ export function ReceiptModal({ open, data, onClose, viewOnly = false }: ReceiptM
                 <span>{formatPeso(p.amount)}</span>
               </div>
             ))}
+
+            {data.invoiceType === 'CHARGE' && data.payments.length === 0 && (
+              <div className="flex justify-between font-semibold">
+                <span>On account, to collect</span>
+                <span>{formatPeso(data.totalAmount)}</span>
+              </div>
+            )}
 
             {change > 0 && (
               <div className="flex justify-between font-bold text-green-600">

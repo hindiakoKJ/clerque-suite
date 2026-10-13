@@ -48,6 +48,16 @@ export class ReportsController {
   }
 
   /**
+   * The owner's VAT-line warning on the POS dashboard: a non-VAT shop's gross
+   * sales over the last 12 months. Owner only -- it is the owner's tax decision.
+   */
+  @Roles('BUSINESS_OWNER')
+  @Get('vat-line')
+  getVatLine(@CurrentUser() user: JwtPayload) {
+    return this.reportsService.getVatLine(user.tenantId!);
+  }
+
+  /**
    * Sprint 19 — Sales report over an arbitrary date range.
    * Powers /pos/reports/sales (owner-only).
    * Owner + Manager only — accountants pull this from Ledger via journal entries.

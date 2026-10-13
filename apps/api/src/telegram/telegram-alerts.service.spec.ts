@@ -27,6 +27,7 @@ describe('TelegramAlertsService', () => {
       purchaseRequest: { findFirst: jest.fn(async ({ where }: any) => (where.tenantId === 't1' ? REQUEST : null)) },
       branch: { findFirst: jest.fn(async ({ where }: any) => (where.tenantId === 't1' && where.id === 'b1' ? { name: 'Main', tenant: { name: 'Cafe Carolina' } } : null)) },
       user: { findFirst: jest.fn(async ({ where }: any) => (where.tenantId === 't1' ? { name: 'Anne' } : null)) },
+      tenant: { findUnique: jest.fn(async ({ where }: any) => (where.id === 't1' ? { name: 'Cafe Carolina' } : null)) },
     };
     const client: any = { enabled: opts.enabled ?? true, sendMessage: jest.fn(), sendPhoto: jest.fn() };
     const links: any = {
@@ -242,6 +243,63 @@ describe('TelegramAlertsService', () => {
       prisma.branch.findFirst.mockRejectedValueOnce(new Error('database down'));
       await expect(svc.weeklyCountSent('t1', 'b1', COUNT)).resolves.toBeUndefined();
       expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ownerNotice -- a notice with no alert of its own (roll call, a part returned that was never sold)', () => {
+    it('goes on the sales switch to the branch\'s recipients: bold title, lines in a block, everything escaped', async () => {
+      const { svc, client, links, prisma } = build();
+      await svc.ownerNotice('t1', 'b1', 'Parts <missing> & gone', ['Tag 000457 Headlamp <x>', 'Tag 000458 Muffler & bracket']);
+      expect(links.anyoneListening).toHaveBeenCalledWith('t1', 'sales');
+      expect(links.recipients).toHaveBeenCalledWith('t1', 'b1', 'sales', false);
+      expect(prisma.branch.findFirst.mock.calls[0][0].where).toEqual({ id: 'b1', tenantId: 't1' });
+      expect(client.sendMessage.mock.calls.map((c: any[]) => c[0])).toEqual(['101', '102']);
+      const text: string = client.sendMessage.mock.calls[0][1];
+      expect(text.split('\n')[0]).toBe('⚠️ <b>Parts &lt;missing&gt; &amp; gone</b>');
+      expect(text).toContain('Cafe Carolina · Main');
+      expect(text).toContain('<pre>Tag 000457 Headlamp &lt;x&gt;\nTag 000458 Muffler &amp; bracket</pre>');
+      expect(text.replace(/<\/?(b|pre)>/g, '')).not.toMatch(/[<>]/);
+    });
+
+    it('with no branch: the shop\'s name, to the owner and every-branch managers', async () => {
+      const { svc, client, links, prisma } = build({ chats: ['101'] });
+      await svc.ownerNotice('t1', null, 'Returned but never sold', ['Tag 000459 Seat']);
+      expect(links.recipients).toHaveBeenCalledWith('t1', null, 'sales', false);
+      expect(prisma.branch.findFirst).not.toHaveBeenCalled();
+      expect(prisma.tenant.findUnique.mock.calls[0][0].where).toEqual({ id: 't1' });
+      const text: string = client.sendMessage.mock.calls[0][1];
+      expect(text.split('\n').slice(0, 2)).toEqual(['⚠️ <b>Returned but never sold</b>', 'Cafe Carolina']);
+    });
+
+    it('owners only, when asked: the managers are left out', async () => {
+      const { svc, links } = build();
+      await svc.ownerNotice('t1', 'b1', 'Roll call: 1 missing', ['Missing: Tag 000457'], { ownersOnly: true });
+      expect(links.recipients).toHaveBeenCalledWith('t1', 'b1', 'sales', true);
+    });
+
+    it('a branch of another shop sends nothing', async () => {
+      const { svc, client } = build();
+      await svc.ownerNotice('t2', 'b1', 'Parts missing', ['Tag 000457']);
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('never rejects, and reads nothing when Telegram is off or nobody listens', async () => {
+      const off = build({ enabled: false });
+      await expect(off.svc.ownerNotice('t1', 'b1', 'x', ['y'])).resolves.toBeUndefined();
+      expect(off.links.anyoneListening).not.toHaveBeenCalled();
+      const quiet = build({ listening: false });
+      await quiet.svc.ownerNotice('t1', 'b1', 'x', ['y']);
+      expect(quiet.links.recipients).not.toHaveBeenCalled();
+      expect(quiet.prisma.branch.findFirst).not.toHaveBeenCalled();
+      const { svc, client, prisma, links } = build();
+      prisma.branch.findFirst.mockRejectedValueOnce(new Error('database down'));
+      await expect(svc.ownerNotice('t1', 'b1', 'x', ['y'])).resolves.toBeUndefined();
+      links.recipients.mockRejectedValueOnce(new Error('database down'));
+      await expect(svc.ownerNotice('t1', 'b1', 'x', ['y'])).resolves.toBeUndefined();
+      // A caller handing it something odd costs only the notice.
+      await expect(svc.ownerNotice('t1', 'b1', undefined as any, null as any)).resolves.toBeUndefined();
+      expect(client.sendMessage).toHaveBeenCalledTimes(2);
+      expect(client.sendMessage.mock.calls[0][1].split('\n')[0]).toBe('⚠️ <b>Notice</b>');
     });
   });
 

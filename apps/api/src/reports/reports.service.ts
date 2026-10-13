@@ -2,6 +2,35 @@ import { Injectable, NotFoundException, ConflictException } from '@nestjs/common
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, BillStatus, InvoiceStatus } from '@prisma/client';
 import { stillWaiting } from '../orders/waste';
+import { DAY_MS, manilaDayOf, manilaDayStart } from '../ingredient-reports/daily-usage';
+
+/**
+ * The VAT line. A non-VAT shop must register for VAT once its gross sales pass
+ * ₱3,000,000 in any 12 months. The owner is warned from 80% of it, early enough
+ * to see the bookkeeper before the line, not after.
+ */
+export const VAT_LINE = 3_000_000;
+export const VAT_LINE_WARN_AT = 2_400_000;
+
+/** The last 12 months in Manila days: the 365 days ending today, today included. */
+export function vatLineWindow(now: Date): { from: Date; to: Date; fromDay: string; toDay: string } {
+  const toDay   = manilaDayOf(now);
+  const from    = new Date(manilaDayStart(toDay).getTime() - 364 * DAY_MS);
+  const to      = new Date(manilaDayStart(toDay).getTime() + DAY_MS - 1);
+  return { from, to, fromDay: manilaDayOf(from), toDay };
+}
+
+export type VatLine =
+  | { applies: false }
+  | {
+      applies:    true;
+      /** Paid and completed sales in the window, voids left out. */
+      grossSales: number;
+      line:       number;
+      warnAt:     number;
+      from:       string;
+      to:         string;
+    };
 
 /** Bills and invoices that are not money owed: never posted, or posted and reversed. */
 export const UNPOSTED_BILL_STATUSES: BillStatus[] = ['DRAFT', 'CANCELLED', 'VOIDED'];
@@ -208,6 +237,32 @@ export class ReportsService {
     return { date, branchId, ...summary };
   }
 
+  /**
+   * How close a non-VAT shop is to the VAT line: its gross sales over the last
+   * 12 months, every branch, by the Manila day each sale was paid. A voided
+   * receipt is not a sale, so only PAID and COMPLETED orders count. A
+   * VAT-registered shop is past this question and gets nothing back.
+   */
+  async getVatLine(tenantId: string, now: Date = new Date()): Promise<VatLine> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where:  { id: tenantId },
+      select: { taxStatus: true },
+    });
+    if (!tenant || tenant.taxStatus === 'VAT') return { applies: false };
+
+    const { from, to, fromDay, toDay } = vatLineWindow(now);
+    const agg = await this.prisma.order.aggregate({
+      where: {
+        tenantId,
+        status: { in: ['PAID', 'COMPLETED'] },
+        paidAt: { gte: from, lte: to },
+      },
+      _sum: { totalAmount: true },
+    });
+    const grossSales = Math.round(Number(agg._sum.totalAmount ?? 0) * 100) / 100;
+    return { applies: true, grossSales, line: VAT_LINE, warnAt: VAT_LINE_WARN_AT, from: fromDay, to: toDay };
+  }
+
   // ─── Shift report ──────────────────────────────────────────────────────────
 
   async getShiftReport(tenantId: string, shiftId: string): Promise<ShiftReport> {
@@ -360,6 +415,16 @@ export class ReportsService {
           orderCount: existing.orderCount + 1,
         });
       }
+      // A sale on account: what is still to collect shows as 'CHARGE', so the
+      // ways of paying add up to the day's sales. It is not money received.
+      if (order.invoiceType === 'CHARGE') {
+        const collected = order.payments.reduce((s, p) => s + Number(p.amount), 0);
+        const owed = Math.round((Number(order.totalAmount) - collected) * 100) / 100;
+        if (owed > 0) {
+          const existing = methodMap.get('CHARGE') ?? { totalAmount: 0, orderCount: 0 };
+          methodMap.set('CHARGE', { totalAmount: existing.totalAmount + owed, orderCount: existing.orderCount + 1 });
+        }
+      }
     }
     const byPaymentMethod: PaymentBreakdown[] = Array.from(methodMap.entries()).map(
       ([method, v]) => ({ method, ...v }),
@@ -369,7 +434,7 @@ export class ReportsService {
       .filter((p) => p.method === 'CASH')
       .reduce((s, p) => s + p.totalAmount, 0);
     const nonCashRevenue = byPaymentMethod
-      .filter((p) => p.method !== 'CASH')
+      .filter((p) => p.method !== 'CASH' && p.method !== 'CHARGE')
       .reduce((s, p) => s + p.totalAmount, 0);
 
     // Top products

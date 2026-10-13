@@ -17,6 +17,8 @@ export interface PaymentEntry {
 /** B2B / CHARGE invoice customer info (RR No. 1-2026) */
 export interface B2bOrderInfo {
   invoiceType:      InvoiceType;
+  /** A sale on account (CHARGE): the customer account it is billed to. */
+  customerId?:      string;
   customerName?:    string;
   customerTin?:     string;
   customerAddress?: string;
@@ -103,6 +105,17 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
   const [customerName, setCustomerName] = useState('');
   const [customerTin, setCustomerTin] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
+  /*
+    A sale on account is billed to one of the shop's customer accounts, so it
+    can be collected later and kept inside the limit the owner set. The
+    server refuses a CHARGE with no account or with any payment on it.
+  */
+  type Account = { id: string; name: string; address: string | null };
+  const [account, setAccount] = useState<Account | null>(null);
+  const [accountSearch, setAccountSearch] = useState('');
+  const [accountMatches, setAccountMatches] = useState<Account[]>([]);
+  const [accountSearched, setAccountSearched] = useState('');
+  const onAccount = invoiceType === 'CHARGE';
 
   const planFeatures = useAuthStore((s) => (s.user as JwtPayload | null)?.planFeatures);
   const phoneLookupEnabled = Boolean(planFeatures?.customerPhoneLookup);
@@ -148,6 +161,9 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
       setCustomerName('');
       setCustomerTin('');
       setCustomerAddress('');
+      setAccount(null);
+      setAccountSearch('');
+      setAccountMatches([]);
       setCustomerPhone('');
       setPhoneMatches([]);
       setPhoneLookupOpen(false);
@@ -173,11 +189,36 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
     return () => { cancelled = true; clearTimeout(handle); };
   }, [customerPhone, phoneLookupEnabled, showB2b]);
 
-  // Offline forces CASH/SPLIT only
+  // Customer accounts for a sale on account, by name or phone.
+  useEffect(() => {
+    if (!onAccount || account) { setAccountMatches([]); return; }
+    const q = accountSearch.trim();
+    if (q.length < 2) { setAccountMatches([]); return; }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      api.get('/customers', { params: { search: q } })
+        .then((r) => { if (!cancelled) { setAccountMatches(((r.data ?? []) as Account[]).slice(0, 8)); setAccountSearched(q); } })
+        .catch(() => { if (!cancelled) setAccountMatches([]); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [accountSearch, onAccount, account]);
+
+  function pickAccount(a: Account) {
+    setAccount(a);
+    setAccountSearch('');
+    setAccountMatches([]);
+    // The invoice's "Bill to" is the account, unless the cashier already typed one.
+    if (!customerName.trim()) setCustomerName(a.name);
+    if (!customerAddress.trim() && a.address) setCustomerAddress(a.address);
+    setError('');
+  }
+
+  // Offline forces CASH/SPLIT only, and a sale on account needs the connection.
   useEffect(() => {
     if (isOffline) {
       setMethod('CASH');
       setTab((t) => (t === 'SPLIT' ? 'SPLIT' : 'CASH'));
+      setInvoiceType('CASH_SALE');
     }
   }, [isOffline]);
 
@@ -259,6 +300,31 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
   }
 
   async function handleConfirm() {
+    if (onAccount) {
+      if (!account) { setError('Pick the customer account this sale goes on.'); return; }
+      if (buyerRequired && (!customerName.trim() || !customerAddress.trim())) {
+        setError('An engine, half-cut or frame piece needs the buyer\'s name and address. Type them below.');
+        return;
+      }
+      setLoading(true);
+      try {
+        // Nothing is paid now: the whole amount is collected from the account later.
+        await onConfirm([], {
+          invoiceType:     'CHARGE',
+          customerId:      account.id,
+          customerName:    customerName.trim() || account.name,
+          customerTin:     customerTin.trim() || undefined,
+          customerAddress: customerAddress.trim() || undefined,
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Failed to save the sale.';
+        setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? msg);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     // For cash tab, allow direct confirm with the typed bayad amount
     let finalPayments = payments;
     if (tab === 'CASH' && finalPayments.length === 0 && bayadNum >= remaining && bayadNum > 0) {
@@ -305,6 +371,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
 
   // The big CTA label varies by tab
   const ctaLabel = (() => {
+    if (onAccount) return `Put on account · ${formatPeso(total)}`;
     if (tab === 'CASH') {
       const amt = bayadNum > 0 ? bayadNum : 0;
       return `Confirm payment · ${formatPeso(amt || total)} received`;
@@ -317,6 +384,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
 
   const ctaDisabled = (() => {
     if (loading) return true;
+    if (onAccount) return !account;
     if (tab === 'SPLIT') return !settled;
     if (tab === 'CASH') {
       if (payments.length > 0) return !settled;
@@ -443,7 +511,17 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
 
           {/* ── Body ────────────────────────────────────────────────── */}
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-8 [@media(max-height:700px)]:p-4">
-            {tab === 'CASH' && (
+            {onAccount && (
+              <div className="rounded-xl border border-border bg-card p-4 text-sm">
+                <p className="font-semibold">Nothing is paid now.</p>
+                <p className="mt-1 text-muted-foreground">
+                  {account
+                    ? `${formatPeso(total)} goes on ${account.name}'s account, to be collected later.`
+                    : 'Pick the customer account below. The amount is collected from them later.'}
+                </p>
+              </div>
+            )}
+            {!onAccount && tab === 'CASH' && (
               <CashTab
                 total={remaining}
                 amountStr={amountStr}
@@ -455,7 +533,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
                 onKeypad={keypadPress}
               />
             )}
-            {tab === 'GCASH' && (
+            {!onAccount && tab === 'GCASH' && (
               <BrandTab
                 brand="var(--counter-gcash)"
                 brandSoft="#E1EEFE"
@@ -466,7 +544,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
                 setReference={(v) => { setReference(v); setError(''); }}
               />
             )}
-            {tab === 'PAYMAYA' && (
+            {!onAccount && tab === 'PAYMAYA' && (
               <BrandTab
                 brand="var(--counter-paymaya)"
                 brandSoft="#D9F4E1"
@@ -477,14 +555,14 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
                 setReference={(v) => { setReference(v); setError(''); }}
               />
             )}
-            {tab === 'CARD' && (
+            {!onAccount && tab === 'CARD' && (
               <CardTab
                 amount={remaining}
                 reference={reference}
                 setReference={(v) => { setReference(v); setError(''); }}
               />
             )}
-            {tab === 'SPLIT' && (
+            {!onAccount && tab === 'SPLIT' && (
               <SplitTab
                 total={total}
                 remaining={remaining}
@@ -511,7 +589,7 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
             <div className="mt-6 border border-border rounded-xl overflow-hidden bg-card shadow-md">
               <button
                 type="button"
-                onClick={() => { setShowB2b((v) => !v); setInvoiceType(!showB2b && !buyerRequired ? 'CHARGE' : 'CASH_SALE'); }}
+                onClick={() => { setShowB2b((v) => !v); setInvoiceType('CASH_SALE'); setAccount(null); }}
                 className="w-full flex items-center justify-between px-4 py-3 bg-muted hover:bg-secondary transition-colors"
               >
                 <span className="flex items-center gap-2 text-xs font-semibold text-muted-foreground">
@@ -527,8 +605,10 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
                       <button
                         key={t}
                         type="button"
-                        onClick={() => setInvoiceType(t)}
-                        className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                        onClick={() => { setInvoiceType(t); setError(''); if (t === 'CASH_SALE') setAccount(null); }}
+                        disabled={t === 'CHARGE' && isOffline}
+                        title={t === 'CHARGE' && isOffline ? 'A sale on account needs the connection.' : undefined}
+                        className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                           invoiceType === t
                             ? 'border-transparent text-white'
                             : 'border-border text-muted-foreground hover:bg-muted'
@@ -539,6 +619,44 @@ export function PaymentModal({ open, total, isOffline, canTakeCash = true, busin
                       </button>
                     ))}
                   </div>
+
+                  {onAccount && (
+                    <div className="space-y-1.5">
+                      {account ? (
+                        <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--counter-primary)] bg-muted px-3 py-2 text-sm">
+                          <span><span className="text-muted-foreground">Account:</span> <span className="font-semibold">{account.name}</span></span>
+                          <button type="button" onClick={() => setAccount(null)} className="text-xs font-medium text-muted-foreground underline">Change</button>
+                        </div>
+                      ) : (
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                          <input
+                            type="text"
+                            value={accountSearch}
+                            onChange={(e) => setAccountSearch(e.target.value)}
+                            placeholder="Customer account: type a name or phone"
+                            aria-label="Customer account"
+                            className="w-full h-10 rounded-lg border border-border bg-white text-foreground placeholder:text-muted-foreground pl-8 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--counter-primary)]"
+                          />
+                          {accountMatches.length > 0 && (
+                            <ul className="absolute z-10 mt-1 w-full max-h-48 overflow-auto rounded-lg border border-border bg-white shadow-lg text-sm">
+                              {accountMatches.map((a) => (
+                                <li key={a.id}>
+                                  <button type="button" onClick={() => pickAccount(a)} className="w-full text-left px-3 py-2 hover:bg-muted transition-colors">
+                                    <div className="font-medium">{a.name}</div>
+                                    {a.address && <div className="text-xs text-muted-foreground">{a.address}</div>}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {accountSearch.trim().length >= 2 && accountSearched === accountSearch.trim() && accountMatches.length === 0 && (
+                            <p className="mt-1 text-[11px] text-muted-foreground">No account by that name. The owner adds customer accounts in Ledger.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {phoneLookupEnabled && (
                     <div className="relative">

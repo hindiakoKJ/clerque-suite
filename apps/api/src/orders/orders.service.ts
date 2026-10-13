@@ -27,6 +27,7 @@ import { supervisorPinAttempts } from '../auth/pin-attempts';
 import { pricesBelowMenu, loadCatalog, type SoldLine } from './price-check';
 import { planTagSale, claimTags, releaseTag } from './tag-sale';
 import { tagNumberFromNote } from '../tags/tag-rules';
+import { openChargeBalance, overCreditLimitMessage } from '../ar/credit-limit';
 
 /** Peso tolerance when comparing a caller's totals against our own. One
  *  centavo absorbs float noise without letting a real discrepancy through. */
@@ -539,6 +540,40 @@ export class OrdersService {
         });
         if (validConfigs !== discountConfigIds.length) {
           throw new BadRequestException('One or more discount configs do not belong to your organization.');
+        }
+      }
+    }
+
+    /*
+      A sale on account is money the shop has not got yet, so it needs someone
+      to collect it from, and it stays inside the limit the owner set for them.
+      Live sales only: a sale replayed from an offline till already happened,
+      and refusing it now would lose the record of goods already handed over.
+      The owner may go over the limit -- it is their money to lend. The balance
+      is the same one the Customers page shows (credit-limit.ts).
+    */
+    if (invoiceType === 'CHARGE' && !replayedOffline) {
+      if (!payload.customerId) {
+        throw new BadRequestException({
+          code:    'CHARGE_NEEDS_CUSTOMER',
+          message: 'A sale on account needs the customer\'s account. Pick the customer, or take payment now.',
+        });
+      }
+      if (callerRole !== 'BUSINESS_OWNER') {
+        const customer = await this.prisma.customer.findFirst({
+          where:  { id: payload.customerId, tenantId },
+          select: { name: true, creditLimit: true },
+        });
+        if (customer?.creditLimit != null) {
+          const refusal = overCreditLimitMessage({
+            name:        customer.name,
+            creditLimit: Number(customer.creditLimit),
+            owes:        await openChargeBalance(this.prisma, tenantId, payload.customerId),
+            sale:        Number(payload.totalAmount),
+          });
+          if (refusal) {
+            throw new BadRequestException({ code: 'OVER_CREDIT_LIMIT', message: refusal });
+          }
         }
       }
     }

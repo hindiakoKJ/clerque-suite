@@ -17,6 +17,7 @@ import { isLaundryType } from '@repo/shared-types';
 import { LaundryDashboard } from './LaundryDashboard';
 import { GetStartedChecklist } from '@/components/onboarding/GetStartedChecklist';
 import { useSalesChecklist } from '@/components/onboarding/useSalesChecklist';
+import { VAT_LINE_ROUTE, vatLineCard, type VatLineData } from './vat-line';
 
 const METHOD_LABELS: Record<string, string> = {
   CASH: 'Cash',
@@ -25,6 +26,8 @@ const METHOD_LABELS: Record<string, string> = {
   MAYA_PERSONAL: 'Maya Personal',
   MAYA_BUSINESS: 'Maya Business',
   QR_PH: 'QR Ph',
+  // Sales on account: still to collect, not money received.
+  CHARGE: 'On account',
 };
 
 function todayPH() {
@@ -168,6 +171,18 @@ function SalesDashboard() {
     staleTime: 5 * 60_000,
   });
 
+  // A non-VAT shop's last 12 months against the ₱3M VAT line. The owner's tax
+  // decision, so only the owner asks; a VAT-registered shop gets nothing back.
+  const isOwner = user?.role === 'BUSINESS_OWNER';
+  const { data: vatLine } = useQuery<VatLineData>({
+    queryKey: ['vat-line'],
+    queryFn:  () => api.get(VAT_LINE_ROUTE).then((r) => r.data),
+    enabled:  isOwner,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+  const vatCard = isOwner ? vatLineCard(vatLine) : null;
+
   const maxHourRevenue = Math.max(...(data?.byHour.map((h) => h.revenue) ?? [1]), 1);
 
   return (
@@ -210,6 +225,23 @@ function SalesDashboard() {
       {canSeeRevenue && (
         <div className="px-4 sm:px-6 pt-4 sm:pt-6">
           <SauceLevelsCard branchId={branchId || null} />
+        </div>
+      )}
+
+      {/* ── The VAT line (owner, non-VAT shop, from ₱2.4M). Its own query: it does not wait on the day's report. ── */}
+      {vatCard && (
+        <div className="px-4 sm:px-6 pt-4 sm:pt-6">
+          <div
+            className={`rounded-lg border px-4 py-3 flex items-start gap-3 ${
+              vatCard.tone === 'red' ? 'border-red-300 bg-red-50' : 'border-amber-300 bg-amber-50'
+            }`}
+          >
+            <AlertTriangle className={`w-5 h-5 shrink-0 mt-0.5 ${vatCard.tone === 'red' ? 'text-red-600' : 'text-amber-600'}`} />
+            <div className={`flex-1 text-sm ${vatCard.tone === 'red' ? 'text-red-900' : 'text-amber-900'}`}>
+              <p className="font-semibold">{vatCard.headline}</p>
+              {vatCard.advice && <p className="leading-snug mt-1">{vatCard.advice}</p>}
+            </div>
+          </div>
         </div>
       )}
 

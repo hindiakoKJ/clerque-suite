@@ -55,8 +55,41 @@ with the theft rules. The Inventory card shows at RETAIL shops only (the
 token now carries businessType; older sessions see it after re-login).
 Cafes are unchanged. Checked end to end on a local copy, books included.
 Local test shop: `surplus-local` (accounts in the gitignored apps/api/.env).
-Next by the plan: phase 2 (counts by number, owner write-offs, daily
-summary; no migration), then the Play app (phases 3-4).
+
+## Web finished before the Play app (13 Oct, KJ: "finish first everything on the web app")
+
+No migration. Checked on the local copy, books included:
+- **Theft checks** (`tags/tag-checks.service.ts`, Inventory screens Roll call
+  and Return a part): roll call by tag number, blind (staff see only "sent";
+  results, with when each missing part was last found, are the owner's
+  alone, in the bell and on the owner's Telegram, never a manager's);
+  a part brought back that was never sold alerts the owner at once, with
+  whose drawers were open since (names to the owner only); owner-only tag
+  write-off with a photo (damage to 5070, lost/stolen to 5060, at the
+  tag's own cost; a part waiting for cost is only retired); printed label
+  numbers never used, on Print labels.
+- **Product write-offs** (Adjust Stock): reason code reaches the books,
+  valued at the shelf's average cost, approver on the log, audit row, PIN
+  through the shared lock-out, and nobody approves their own.
+- **Sales on account** now work from the web till (they never did: the till
+  always sent a payment, which the server refuses for CHARGE, and opening
+  the B2B panel silently switched a cash sale to CHARGE). Pick a customer
+  account; nothing is paid; receipt says "On account, to collect". Credit
+  limits (set in Ledger > Customers) refuse a sale over the limit, except
+  the owner's. The day's report shows "On account" among the ways of paying.
+- **VAT line**: owner's dashboard card for a non-VAT shop from ₱2.4M of the
+  ₱3M in the last 12 months.
+- **Daily close on Telegram** at 21:30 Manila per branch (sales by method,
+  tagged parts, discounts, voids, refunds, drawers, flags); the owner's copy
+  has tag costs and margins, the managers' does not.
+
+**KJ to decide:** product write-offs now always need a second person's PIN,
+the owner's included, so a shop whose only PIN holder is the owner cannot
+write off a broken item. Letting the owner sign for their own write-off was
+refused by the session's safety check as loosening a security rule; it is
+KJ's call (`inventory.service.ts`, `adjust`).
+
+Next: the Play app (phases 3-4 of the inventory plan), after KJ's word.
 
 ## Waiting on KJ, in this order
 

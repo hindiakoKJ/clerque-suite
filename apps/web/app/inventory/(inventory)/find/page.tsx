@@ -1,7 +1,7 @@
 'use client';
 import { useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Camera, Loader2, Search } from 'lucide-react';
+import { Camera, Loader2, Search, Trash2 } from 'lucide-react';
 import { formatPeso } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth';
 import { Button } from '@/components/ui/button';
@@ -9,8 +9,10 @@ import { Input } from '@/components/ui/input';
 import { BranchPicker } from '@/components/inventory/BranchPicker';
 import { TagCard } from '@/components/inventory/TagCard';
 import { useInventoryBranch } from '@/hooks/inventory/useInventoryBranch';
-import { lookupCode, uploadTagPhoto } from '@/lib/inventory/tag-api';
-import { apiErrorText, cleanCode, type LookupResult } from '@/lib/inventory/tags';
+import { lookupCode, uploadTagPhoto, writeOffTag } from '@/lib/inventory/tag-api';
+import {
+  WRITE_OFF_REASONS, apiErrorText, cleanCode, type LookupResult, type Tag, type WriteOffReason,
+} from '@/lib/inventory/tags';
 import { OWNER_ROLES } from '../inventory-nav';
 
 /**
@@ -31,6 +33,7 @@ export default function FindTagPage() {
   const [error, setError]       = useState('');
   const [uploading, setUploading] = useState(false);
   const [photoNote, setPhotoNote] = useState('');
+  const [writeOffNote, setWriteOffNote] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef  = useRef<HTMLInputElement>(null);
 
@@ -40,6 +43,7 @@ export default function FindTagPage() {
     setLoading(true);
     setError('');
     setPhotoNote('');
+    setWriteOffNote('');
     try {
       const r = await lookupCode(c, branchId);
       setResult(r);
@@ -57,6 +61,8 @@ export default function FindTagPage() {
   const tag = result?.kind === 'TAG' ? result.tag : null;
   // Staff add photos only while the part waits for its cost; after that, the owner alone (the API's rule).
   const canAddPhotos = !!tag && (tag.status === 'WAITING_FOR_COST' || (isOwner && tag.status === 'IN_STOCK'));
+  // Only the owner writes a part off, and only one still on the shelf.
+  const canWriteOff = !!tag && isOwner && (tag.status === 'WAITING_FOR_COST' || tag.status === 'IN_STOCK');
 
   async function addPhotos(files: FileList | null) {
     if (!tag || !files || files.length === 0) return;
@@ -158,8 +164,100 @@ export default function FindTagPage() {
               {photoNote && <p className="text-sm text-muted-foreground" role="status">{photoNote}</p>}
             </div>
           )}
+          {canWriteOff && (
+            <WriteOffPanel
+              key={tag.id}
+              tag={tag}
+              onDone={async (message) => {
+                setWriteOffNote(message);
+                queryClient.invalidateQueries({ queryKey: ['tags'] });
+                // Read the tag again so it shows as written off.
+                try { setResult(await lookupCode(tag.number, branchId)); } catch { /* the note says it was written off */ }
+              }}
+            />
+          )}
+          {writeOffNote && <p className="rounded-lg border border-border bg-muted/40 p-3 text-sm" role="status">{writeOffNote}</p>}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The owner writes a part off: why, and a photo of the part with its number
+ * showing. Damage goes to waste in the books, a lost or stolen part to loss;
+ * a part still waiting for its cost was never in the books, so it is only
+ * taken off the list.
+ */
+function WriteOffPanel({ tag, onDone }: { tag: Tag; onDone: (message: string) => Promise<void> }) {
+  const [open, setOpen]     = useState(false);
+  const [reason, setReason] = useState<WriteOffReason | ''>('');
+  const [note, setNote]     = useState('');
+  const [photo, setPhoto]   = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError]   = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  if (!open) {
+    return (
+      <Button variant="outline" onClick={() => setOpen(true)} className="h-12 w-full border-red-500/40 text-base text-red-700 hover:bg-red-500/10 dark:text-red-300">
+        <Trash2 className="h-5 w-5" /> Write this part off
+      </Button>
+    );
+  }
+
+  async function save() {
+    if (!reason) { setError('Say why it is written off.'); return; }
+    if (!photo) { setError('Take a photo of the part with its number showing.'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      const r = await writeOffTag(tag.id, reason, note, photo);
+      await onDone(r.bookedTo
+        ? `Tag ${r.number} is written off and out of stock. The books show it as ${r.bookedTo === '5060' ? 'a loss (5060)' : 'waste (5070)'}, at its cost.`
+        : `Tag ${r.number} is written off. It had no cost yet, so nothing changes in the books.`);
+    } catch (e) {
+      setError(apiErrorText(e, 'The part was not written off.'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3 rounded-2xl border border-red-500/40 bg-red-500/5 p-4">
+      <p className="text-base font-semibold">Write off Tag {tag.number}</p>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {WRITE_OFF_REASONS.map((r) => (
+          <button
+            key={r.value}
+            type="button"
+            onClick={() => { setReason(r.value); setError(''); }}
+            aria-pressed={reason === r.value}
+            className={`min-h-11 rounded-lg border px-3 py-2 text-sm font-medium ${reason === r.value ? 'border-red-500 bg-red-500/15 text-red-800 dark:text-red-200' : 'border-border bg-card'}`}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+      <Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="What happened (optional)" className="h-11" />
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => { setPhoto(e.target.files?.[0] ?? null); setError(''); e.target.value = ''; }}
+      />
+      <Button variant="outline" onClick={() => fileRef.current?.click()} className="h-11 w-full">
+        <Camera className="h-4 w-4" /> {photo ? `Photo: ${photo.name}` : 'Photo of the part, number showing'}
+      </Button>
+      {error && <p className="text-sm font-medium text-red-700 dark:text-red-300" role="alert">{error}</p>}
+      <div className="flex gap-2">
+        <Button onClick={() => void save()} disabled={saving} className="h-11 flex-1 bg-red-600 text-white hover:bg-red-700">
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Write it off'}
+        </Button>
+        <Button variant="outline" onClick={() => setOpen(false)} disabled={saving} className="h-11">Cancel</Button>
+      </div>
+    </section>
   );
 }

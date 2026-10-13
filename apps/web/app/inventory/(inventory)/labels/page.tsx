@@ -6,8 +6,8 @@ import { Loader2, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Code128Svg } from '@/components/inventory/Code128Svg';
-import { listLabelRuns, reserveLabels } from '@/lib/inventory/tag-api';
-import { apiErrorText, type LabelRun, type ReservedLabels } from '@/lib/inventory/tags';
+import { labelGaps, listLabelRuns, reserveLabels } from '@/lib/inventory/tag-api';
+import { apiErrorText, manilaTime, type LabelGaps, type LabelRun, type ReservedLabels } from '@/lib/inventory/tags';
 
 /**
  * Print labels: the owner or a manager asks for the next N numbers, then
@@ -65,6 +65,7 @@ export default function PrintLabelsPage() {
       setRun(r);
       setCount('');
       queryClient.invalidateQueries({ queryKey: ['tag-label-runs'] });
+      queryClient.invalidateQueries({ queryKey: ['tag-label-gaps'] });
     } catch (e) {
       setError(apiErrorText(e, 'Could not get the label numbers.'));
     } finally {
@@ -173,7 +174,61 @@ export default function PrintLabelsPage() {
           </div>
         )}
       </section>
+
+      <UnusedLabels />
     </div>
+  );
+}
+
+const GAP_PREVIEW = 60;
+
+/**
+ * Printed numbers that never became a tag. New labels sit here until they
+ * are stuck on parts; a number still here long after its run was printed is
+ * a label that went missing, or went on a part that was never tagged.
+ */
+function UnusedLabels() {
+  const [open, setOpen] = useState<string | null>(null);
+  const { data, isLoading, isError, error } = useQuery<LabelGaps>({
+    queryKey: ['tag-label-gaps'],
+    queryFn: labelGaps,
+    staleTime: 30_000,
+  });
+
+  return (
+    <section className="space-y-2">
+      <h3 className="text-base font-semibold">Printed but not used yet</h3>
+      <p className="text-sm text-muted-foreground">
+        Label numbers that were printed but are on no tagged part. New labels wait here until they are used; an old one still here is a label to find.
+      </p>
+      {isLoading ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
+      ) : isError ? (
+        <p className="text-sm text-red-700 dark:text-red-300">{apiErrorText(error, 'Could not load the unused labels.')}</p>
+      ) : !data || data.totalUnused === 0 ? (
+        <p className="text-sm text-muted-foreground">Every printed label is on a tagged part.</p>
+      ) : (
+        <ul className="space-y-2">
+          {data.runs.map((r) => {
+            const key = `${r.from}-${r.printedAt}`;
+            const shown = open === key ? r.unused : r.unused.slice(0, GAP_PREVIEW);
+            return (
+              <li key={key} className="rounded-xl border border-border bg-card p-3">
+                <p className="text-sm">
+                  <span className="font-semibold">{r.unused.length} unused</span> from {r.from} to {r.to}, printed {manilaTime(r.printedAt)}
+                </p>
+                <p className="mt-1 break-words font-mono text-xs text-muted-foreground">{shown.join('  ')}</p>
+                {r.unused.length > GAP_PREVIEW && (
+                  <button type="button" onClick={() => setOpen(open === key ? null : key)} className="mt-1 text-xs font-medium text-[var(--accent)] underline">
+                    {open === key ? 'Show fewer' : `Show all ${r.unused.length}`}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 

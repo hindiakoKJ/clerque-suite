@@ -3,12 +3,13 @@ import { DocumentsModule } from '../documents/documents.module';
 import { AuditModule } from '../audit/audit.module';
 import { TagsController } from './tags.controller';
 import { TagsService } from './tags.service';
+import { TagChecksService } from './tag-checks.service';
 
 /** Clerque Inventory, Phase 1: printed label numbers on one-of-a-kind parts. */
 @Module({
   imports:     [DocumentsModule, AuditModule],
   controllers: [TagsController],
-  providers:   [TagsService],
+  providers:   [TagsService, TagChecksService],
   exports:     [TagsService],
 })
 export class TagsModule {}

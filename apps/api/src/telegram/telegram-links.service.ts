@@ -160,7 +160,8 @@ export class TelegramLinksService implements OnModuleInit {
    * active manager of this branch (or of every branch), who has not muted
    * this kind. Read fresh every time; nothing about a person is cached.
    */
-  async recipients(tenantId: string, branchId: string | null, topic: AlertTopic): Promise<string[]> {
+  /** ownersOnly: for what the managers must not see, like a roll call's missing parts. */
+  async recipients(tenantId: string, branchId: string | null, topic: AlertTopic, ownersOnly = false): Promise<string[]> {
     const links = await this.prisma.telegramLink.findMany({
       where: {
         tenantId,
@@ -172,7 +173,7 @@ export class TelegramLinksService implements OnModuleInit {
           isActive: true,
           OR: [
             { role: 'BUSINESS_OWNER' },
-            { role: 'BRANCH_MANAGER', OR: [{ branchId: null }, ...(branchId ? [{ branchId }] : [])] },
+            ...(ownersOnly ? [] : [{ role: 'BRANCH_MANAGER' as const, OR: [{ branchId: null }, ...(branchId ? [{ branchId }] : [])] }]),
           ],
         },
       },

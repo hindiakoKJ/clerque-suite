@@ -116,9 +116,11 @@ export function StockAdjustModal({
       onSuccess();
       onClose();
     } catch (err: unknown) {
+      // The server says why it refused (wrong PIN, your own PIN, too many
+      // tries, stock would go negative); validation refusals come as a list.
+      const message = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
       setError(
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
-        'Failed to adjust stock.',
+        (Array.isArray(message) ? message.join(' ') : message) || 'Failed to adjust stock.',
       );
     } finally {
       setLoading(false);

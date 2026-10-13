@@ -116,7 +116,7 @@ describe('InventoryService.adjust — accounting event payload', () => {
     });
   });
 
-  describe('negative adjustments unchanged', () => {
+  describe('negative adjustments', () => {
     beforeEach(() => {
       // SecAudit A3 supervisor PIN attest — one active supervisor whose
       // hash matches the PIN sent below.
@@ -130,7 +130,7 @@ describe('InventoryService.adjust — accounting event payload', () => {
       tx.inventoryItem.findUnique.mockResolvedValue({ id: 'item-1', quantity: 20, avgCost: 48 });
     });
 
-    it('values write-offs at product.costPrice even if a unitCost sneaks in, with no paymentMethod key', async () => {
+    it('values write-offs at the shelf avgCost even if a unitCost sneaks in, with no paymentMethod key', async () => {
       await service.adjust(TENANT, USER, {
         productId: 'prod-1', branchId: 'branch-1',
         quantity: -5, type: 'STOCK_OUT',
@@ -138,7 +138,9 @@ describe('InventoryService.adjust — accounting event payload', () => {
         unitCost: 55, // must NOT affect negative-flow valuation
       } as any);
       const payload = capturedPayload();
-      expect(payload.totalValue).toBe(250); // |−5| × 50 costPrice, not 55
+      // |−5| × 48 shelf avgCost — not the 50 costPrice, not the 55 unitCost
+      // (write-offs now leave at moving-average cost; see write-off spec).
+      expect(payload.totalValue).toBe(240);
       expect(payload.costPrice).toBe(50);
       expect(payload.quantity).toBe(-5);
       expect(payload.adjustmentType).toBe('STOCK_OUT');

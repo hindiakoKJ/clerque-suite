@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   isTagCode, cleanCode, numberFieldFor, needsNamedBuyer, tagLineNote, statusWords, photoApiPath, apiErrorText, PAID_FROM,
+  addRollCallNumbers,
 } from './tags.ts';
 
 test('only a 6-digit code is a tag: retail barcodes (8, 12, 13, 14) never are', () => {
@@ -63,4 +64,13 @@ test('the order payload sends serializedUnitId, and the cart keys a tag line by 
   const cart = readFileSync(new URL('../../store/pos/cart.ts', import.meta.url), 'utf8');
   assert.match(cart, /`tag:\$\{tag\.id\}`/);
   assert.match(cart, /line\.serializedUnitId && qty > 1/);
+});
+
+test('a roll call takes what the scanner sends: several at once, no repeats, newest first', () => {
+  let r = addRollCallNumbers([], '000001');
+  assert.deepEqual(r, { list: ['000001'], rejected: [] });
+  r = addRollCallNumbers(r.list, '000002\n000001, Tag 000003  4800000000012');
+  assert.deepEqual(r.list, ['000003', '000002', '000001']);
+  assert.deepEqual(r.rejected, ['4800000000012']);
+  assert.deepEqual(addRollCallNumbers(['000001'], '   ').list, ['000001']);
 });

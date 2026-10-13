@@ -128,3 +128,67 @@ export function apiErrorText(e: unknown, fallback: string): string {
   const m = r.data?.message;
   return (Array.isArray(m) ? m.join(' ') : m) || fallback;
 }
+
+// ── The theft checks (POST /tags/roll-call, /tags/returned-unsold, /tags/:id/write-off) ──
+
+/** What a roll call sends back: staff learn only that it arrived; the owner also gets the result. */
+export interface RollCallSent {
+  received: number;
+  result?: {
+    found: string[];
+    missing: { number: string; productName: string }[];
+    unexpected: { number: string; why: string }[];
+  };
+}
+
+/** A past roll call, owner only, with when each missing part was last found. */
+export interface RollCallRecord {
+  countedAt: string;
+  branchId: string;
+  countedByName: string | null;
+  foundCount: number;
+  missing: { number: string; productName: string; lastSeenAt: string | null }[];
+  unexpected: { number: string; why: string }[];
+}
+
+/** Who had a drawer open since goes to the owner's bell only, never back to the counter. */
+export interface ReturnedUnsoldResult { told: boolean; lastSeen: string | null }
+
+export interface LabelGaps {
+  totalUnused: number;
+  runs: { from: string; to: string; printedAt: string; unused: string[] }[];
+}
+
+/** Why the owner writes a part off. Damage goes to waste in the books, a part that is gone to loss. */
+export const WRITE_OFF_REASONS = [
+  { value: 'DAMAGED',   label: 'Damaged' },
+  { value: 'DEFECTIVE', label: 'Defective, cannot be sold' },
+  { value: 'SCRAP',     label: 'Scrap' },
+  { value: 'LOST',      label: 'Lost' },
+  { value: 'STOLEN',    label: 'Stolen' },
+] as const;
+export type WriteOffReason = typeof WRITE_OFF_REASONS[number]['value'];
+
+/**
+ * Numbers typed or scanned for a roll call, added to the ones already in:
+ * a scanner may send several at once, split by spaces, commas or new lines.
+ * Returns the new list (newest first, no repeats) and what was not a tag number.
+ */
+export function addRollCallNumbers(list: string[], raw: string): { list: string[]; rejected: string[] } {
+  const next = [...list];
+  const rejected: string[] = [];
+  for (const piece of raw.split(/[\s,;]+/)) {
+    const c = cleanCode(piece);
+    if (!c) continue;
+    if (!isTagCode(c)) { rejected.push(c); continue; }
+    if (!next.includes(c)) next.unshift(c);
+  }
+  return { list: next, rejected };
+}
+
+/** A date and time the way the shop reads it, in Manila. */
+export function manilaTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-PH', {
+    timeZone: 'Asia/Manila', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}

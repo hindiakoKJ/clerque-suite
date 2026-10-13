@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '@prisma/client';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
+import { openChargeBalance } from './credit-limit';
 
 @Injectable()
 export class CustomersService {
@@ -138,27 +139,10 @@ export class CustomersService {
   /**
    * Sum of totalAmount for CHARGE orders that are not fully collected
    * (i.e., order.totalAmount minus sum of all payments for that order, for orders with a positive remaining balance).
+   * Shared with the till's credit-limit check (credit-limit.ts), so both read the same balance.
    */
   async getOutstandingBalance(customerId: string, tenantId: string): Promise<number> {
-    const chargeOrders = await this.prisma.order.findMany({
-      where: {
-        tenantId,
-        customerId,
-        invoiceType: 'CHARGE',
-        status: { not: 'VOIDED' },
-      },
-      include: { payments: true },
-    });
-
-    let total = 0;
-    for (const order of chargeOrders) {
-      const invoiceAmt = Number(order.totalAmount);
-      const collected  = order.payments.reduce((s, p) => s + Number(p.amount), 0);
-      const remaining  = invoiceAmt - collected;
-      if (remaining > 0) total += remaining;
-    }
-
-    return Math.round(total * 100) / 100;
+    return openChargeBalance(this.prisma, tenantId, customerId);
   }
 
   /**

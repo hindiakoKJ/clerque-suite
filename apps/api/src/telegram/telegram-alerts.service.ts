@@ -6,8 +6,8 @@ import { AlertTopic, TelegramLinksService } from './telegram-links.service';
 // The notes grammar only (a plain module): no reach into the Procure service.
 import { lastPricedLines } from '../procure/procure-notes';
 import {
-  RequestForAlert, SaleForAlert, WeeklyCountForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, photoCaption,
-  postedMessage, priceBelowMenuMessage, saleMessage, weeklyCountMessage,
+  RequestForAlert, SaleForAlert, WeeklyCountForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, ownerNoticeMessage,
+  photoCaption, postedMessage, priceBelowMenuMessage, saleMessage, weeklyCountMessage,
 } from './messages';
 import type { PriceFlag } from '../orders/price-check';
 
@@ -226,6 +226,44 @@ export class TelegramAlertsService {
       });
       if (!branch) return;
       const text = weeklyCountMessage({ ...count, shopName: branch.tenant.name, branchName: branch.name });
+      for (const chat of chats) this.client.sendMessage(chat, text);
+    });
+  }
+
+  /**
+   * Something for the owner to look at that has no alert of its own: parts
+   * missing at a roll call, a part returned that was never sold. A bold
+   * `title` and `lines` as given (escaped here, so any text is safe), to the
+   * owner and the managers of `branchId` -- or, with no branch, the owner and
+   * the managers of every branch. On the sales switch: it is about what the
+   * shop sells. Never rejects; nothing is read when Telegram is off or nobody
+   * in the shop listens. `ownersOnly` leaves the managers out: a theft check
+   * is the owner's alone, since the person counting may be a manager.
+   */
+  ownerNotice(
+    tenantId: string, branchId: string | null, title: string, lines: string[],
+    opts: { ownersOnly?: boolean } = {},
+  ): Promise<void> {
+    return this.fire('owner notice', tenantId, 'sales', async () => {
+      const chats = await this.links.recipients(tenantId, branchId, 'sales', opts.ownersOnly ?? false);
+      if (chats.length === 0) return;
+      let shopName: string;
+      let branchName: string | null = null;
+      if (branchId) {
+        // Only a branch of this shop: a branch id from another shop sends nothing.
+        const branch = await this.prisma.branch.findFirst({
+          where:  { id: branchId, tenantId },
+          select: { name: true, tenant: { select: { name: true } } },
+        });
+        if (!branch) return;
+        shopName = branch.tenant.name;
+        branchName = branch.name;
+      } else {
+        const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } });
+        if (!tenant) return;
+        shopName = tenant.name;
+      }
+      const text = ownerNoticeMessage({ shopName, branchName, title, lines, at: new Date() });
       for (const chat of chats) this.client.sendMessage(chat, text);
     });
   }

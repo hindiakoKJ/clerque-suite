@@ -5,6 +5,7 @@ import { TelegramClient } from './telegram.client';
 import { TelegramLinksService } from './telegram-links.service';
 import { TelegramAlertsService } from './telegram-alerts.service';
 import { TelegramController } from './telegram.controller';
+import { CloseSummaryScheduler } from './close-summary.scheduler';
 
 /**
  * Telegram alerts for a shop's owners and managers. Global so a sale or a
@@ -16,7 +17,8 @@ import { TelegramController } from './telegram.controller';
 @Module({
   imports:     [NotificationsModule, AuditModule],
   controllers: [TelegramController],
-  providers:   [TelegramClient, TelegramLinksService, TelegramAlertsService],
+  // CloseSummaryScheduler: the day's close, sent at 21:30 Manila.
+  providers:   [TelegramClient, TelegramLinksService, TelegramAlertsService, CloseSummaryScheduler],
   exports:     [TelegramAlertsService],
 })
 export class TelegramModule {}

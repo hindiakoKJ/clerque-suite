@@ -355,6 +355,8 @@ export default function PosTerminal() {
       createdAt: new Date().toISOString(),
       // ── BIR CAS: B2B / CHARGE invoice fields (RR No. 1-2026) ──
       invoiceType:     b2b?.invoiceType,
+      // A sale on account: the customer account it is collected from.
+      customerId:      b2b?.customerId,
       customerName:    b2b?.customerName,
       customerTin:     b2b?.customerTin,
       customerAddress: b2b?.customerAddress,

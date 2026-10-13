@@ -277,6 +277,12 @@ describe('TelegramLinksService', () => {
       expect(await svc.recipients('other', 'bx', 'sales')).toEqual(['105']);
     });
 
+    it('owners only: a theft check never reaches a manager', async () => {
+      const { svc } = await everyoneLinked();
+      expect(await svc.recipients('carolina', 'b1', 'sales', true)).toEqual(['101']);
+      expect(await svc.recipients('carolina', null, 'sales', true)).toEqual(['101']);
+    });
+
     it('reads people as they are now: deactivated, demoted or muted stops the alerts', async () => {
       const { svc, users, links } = await everyoneLinked();
       users.find((u) => u.id === 'mgr1')!.isActive = false;

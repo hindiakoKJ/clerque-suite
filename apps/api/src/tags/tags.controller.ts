@@ -3,7 +3,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -12,6 +12,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
 import { TagsService, type PaidFrom } from './tags.service';
+import { TagChecksService, WRITE_OFF_REASONS, type WriteOffReason } from './tag-checks.service';
 
 /** Who prints labels and sees the full list. */
 const LABEL_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER', 'MDM'] as const;
@@ -47,6 +48,30 @@ class CreateTagDto {
   notes?: string;
 }
 
+class RollCallDto {
+  @IsString() @MaxLength(64)
+  branchId!: string;
+
+  @IsArray() @ArrayMaxSize(5000) @IsString({ each: true })
+  numbers!: string[];
+}
+
+class ReturnedUnsoldDto {
+  @IsString() @Matches(/^\d{6}$/, { message: "Type the 6 digits on the part's label." })
+  number!: string;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  note?: string;
+}
+
+class WriteOffDto {
+  @IsIn(WRITE_OFF_REASONS)
+  reason!: WriteOffReason;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  note?: string;
+}
+
 class CostTagDto {
   @Type(() => Number) @IsNumber() @Min(0) @Max(100_000_000)
   cost!: number;
@@ -58,7 +83,10 @@ class CostTagDto {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('tags')
 export class TagsController {
-  constructor(private readonly tags: TagsService) {}
+  constructor(
+    private readonly tags: TagsService,
+    private readonly checks: TagChecksService,
+  ) {}
 
   @Roles(...LABEL_ROLES)
   @Post('labels/reserve')
@@ -86,6 +114,34 @@ export class TagsController {
   }
 
   @Roles(...LABEL_ROLES)
+  @Get('labels/gaps')
+  gaps(@CurrentUser() user: JwtPayload) {
+    return this.checks.labelGaps(user.tenantId!);
+  }
+
+  /** Blind: staff send what they found; only the owner sees what is missing. */
+  @Roles(...TAG_ROLES)
+  @Post('roll-call')
+  rollCall(@CurrentUser() user: JwtPayload, @Body() body: RollCallDto) {
+    return this.checks.rollCall(user.tenantId!, user.sub, user.role, body.branchId, body.numbers);
+  }
+
+  /** The results, like the missing list, are the owner's alone: a manager counts blind too. */
+  @Roles('BUSINESS_OWNER')
+  @Get('roll-calls')
+  rollCalls(@CurrentUser() user: JwtPayload, @Query('branchId') branchId?: string) {
+    return this.checks.listRollCalls(user.tenantId!, branchId);
+  }
+
+  /** A customer brought back a part: if its tag was never sold, the owner is told now. */
+  @Roles(...TAG_ROLES)
+  @Post('returned-unsold')
+  @HttpCode(HttpStatus.OK)
+  returnedUnsold(@CurrentUser() user: JwtPayload, @Body() body: ReturnedUnsoldDto) {
+    return this.checks.returnedUnsold(user.tenantId!, user.sub, body.number, body.note);
+  }
+
+  @Roles(...LABEL_ROLES)
   @Get()
   list(
     @CurrentUser() user: JwtPayload,
@@ -107,6 +163,15 @@ export class TagsController {
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
   addPhoto(@CurrentUser() user: JwtPayload, @Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
     return this.tags.addPhoto(user.tenantId!, user.sub, user.role, id, file);
+  }
+
+  /** The owner alone writes a part off, with a photo of it; the books say why. */
+  @Roles('BUSINESS_OWNER')
+  @Post(':id/write-off')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } }))
+  writeOff(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: WriteOffDto, @UploadedFile() file: Express.Multer.File) {
+    return this.checks.writeOff(user.tenantId!, user.sub, id, body.reason, body.note, file);
   }
 
   /** The owner alone puts a part in stock, after seeing its photos. */

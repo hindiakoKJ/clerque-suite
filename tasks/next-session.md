@@ -14,6 +14,35 @@ shop is complete: one import file with everything for the real Carolina
 shop (Copy setup does the same in one step). Later: one "E-wallet" payment
 for GCash/Maya/MariBank/other wallets, QR Ph kept separate.
 
+## Security check against the 19-item sign-up list (13 Oct)
+
+The full report (with exploit paths, so NOT in this public repo) is on KJ's
+desktop: `E:\AI Projects\Clerque - Security check (19 items) - 2026-10-13.md`.
+The list itself is in KJ's global CLAUDE.md for every app with a login.
+
+Shipped 13 Oct: `00ddd66` (published demo passwords refused at sign-in and
+when setting a password; platform admin walled off from shop owners and PIN
+sign-in; pharmacist PIN check no longer leaks PINs; 2FA codes count toward
+lockout), `76b5090` (NestJS 11.2.7 / multer 2.4.0 / compression 1.8.2),
+`3129d46` (Next.js 16.3.8). Dependabot vulnerability alerts switched on.
+
+Open, in this order:
+1. **KJ changes the platform admin's password** (Settings > Security >
+   Change Password), then set `PLATFORM_ADMIN_MAY_USE_SEEDED_PASSWORD` to
+   false in `apps/api/src/auth/published-passwords.ts` and push. 2FA for that
+   account when he is at a computer (QR scan), and save the backup codes:
+   its .test address cannot receive a reset link.
+2. **Till prices are trusted from the browser.** Not switched to a hard
+   refusal: offline replays after a price change, promos, manager discounts
+   and price lists would be refused at Carolina. Proposed: record and alert
+   the owner (Telegram) on any line below its menu price that no promo or
+   approved discount explains; refuse later, on live online sales only.
+   Needs KJ's word.
+3. Then: cross-shop ids accepted on bank reconciliation, pre-orders,
+   laundry, rentals, modifiers and manual journals; tokens in localStorage
+   (move to httpOnly cookies); email verification at sign-up; Sentry
+   scrubbing; CSP without unsafe-inline/eval.
+
 ## Waiting on KJ, in this order
 
 0. **Railway auto-deploy:** pushes after 29 Sept did not deploy; KJ ran

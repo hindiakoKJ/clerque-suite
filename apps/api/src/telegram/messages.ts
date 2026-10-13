@@ -184,6 +184,32 @@ export function saleMessage(sale: SaleForAlert): string {
   return fitItems(build, blocks, MESSAGE_LIMIT);
 }
 
+export interface PriceAlert {
+  shopName:    string;
+  branchName:  string | null;
+  orderNumber: string;
+  cashierName: string | null;
+  rungAt:      Date;
+  /** Rung up offline and synced late: the till may simply have had an old price. */
+  late:        boolean;
+  flags: { productName: string; quantity: number; soldAt: number; menuPrice: number; why: 'BELOW_MENU' | 'DISCOUNT_WITHOUT_PROMO' }[];
+}
+
+/** A sale whose lines came in under the owner's prices (orders/price-check.ts). */
+export function priceBelowMenuMessage(a: PriceAlert): string {
+  const body: string[] = [clip(`${manilaTime(a.rungAt)}${a.cashierName ? `  ${a.cashierName}` : ''}`, WIDTH), RULE];
+  for (const f of a.flags) {
+    body.push(clip(f.productName, WIDTH));
+    body.push(row(`  ${qty(f.quantity)} x sold at`, money(f.soldAt)));
+    body.push(row(f.why === 'BELOW_MENU' ? '  menu price' : '  promo allows', money(f.menuPrice)));
+  }
+  const note = a.late
+    ? 'Rung up offline: the till may have had an old price. If not, check this sale with the cashier.'
+    : 'The till sent a price lower than your menu. Check this sale with the cashier.';
+  const head = [`⚠️ <b>Sold below menu: ${escapeHtml(a.orderNumber)}</b>`, place(a.shopName, a.branchName)];
+  return `${head.join('\n')}\n<pre>${escapeHtml(body.join('\n'))}</pre>\n<i>${escapeHtml(note)}</i>`;
+}
+
 // ── buying ─────────────────────────────────────────────────────────────────
 
 export interface RequestForAlert {

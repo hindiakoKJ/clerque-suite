@@ -24,6 +24,7 @@ import { OfflineOrder, planFeaturesFor, hasPermission, PH_TIMEZONE } from '@repo
 import { OrderQuoteService } from './order-quote.service';
 import { TelegramAlertsService } from '../telegram/telegram-alerts.service';
 import { supervisorPinAttempts } from '../auth/pin-attempts';
+import { pricesBelowMenu, loadCatalog, type SoldLine } from './price-check';
 
 /** Peso tolerance when comparing a caller's totals against our own. One
  *  centavo absorbs float noise without letting a real discrepancy through. */
@@ -1691,8 +1692,66 @@ export class OrdersService {
 
     // The owner's Telegram alert, once the sale is saved. Not awaited: it can never slow or fail the sale.
     void this.telegramAlerts?.saleConfirmed(tenantId, order.id);
+    // Till sales only: an API caller's totals were already checked against the catalog above.
+    if (channel === 'POS') void this.flagPricesBelowMenu(tenantId, order.id, order.orderNumber, cashierId, payload.items);
 
     return order;
+  }
+
+  /**
+   * Tell the owner about lines sold under the menu price (see price-check.ts).
+   * Runs after the sale is saved and is not awaited: it never refuses, slows or
+   * fails a sale. Records the lines in the audit log, puts a notice in each
+   * owner's bell, and sends the Telegram alert.
+   */
+  private async flagPricesBelowMenu(
+    tenantId: string, orderId: string, orderNumber: string, cashierId: string | null, items: OfflineOrder['items'],
+  ): Promise<void> {
+    try {
+      const lines: SoldLine[] = items.map((i) => ({
+        productId:      i.productId,
+        variantId:      i.variantId ?? null,
+        productName:    i.productName,
+        unitPrice:      Number(i.unitPrice),
+        quantity:       Number(i.quantity),
+        discountAmount: Number(i.discountAmount ?? 0),
+        // Sent by the till with each promo line; not part of the shared CartItem type.
+        promoId:        (i as { promoId?: string }).promoId ?? null,
+        modifiers:      (i.modifiers ?? []).map((m) => ({ modifierOptionId: m.modifierOptionId })),
+      }));
+      const flags = pricesBelowMenu(lines, await loadCatalog(this.prisma, tenantId, lines));
+      if (flags.length === 0) return;
+
+      const what = flags.map((f) => `${f.productName} at ${f.soldAt.toFixed(2)} (menu ${f.menuPrice.toFixed(2)})`).join('; ');
+      await this.audit.log({
+        tenantId,
+        action:      'PRICE_ADJUSTED',
+        entityType:  'Order',
+        entityId:    orderId,
+        after:       { soldBelowMenu: flags },
+        description: `Sold below menu price on ${orderNumber}: ${what}`,
+        performedBy: cashierId ?? undefined,
+      });
+      const owners = await this.prisma.user.findMany({
+        where:  { tenantId, isActive: true, role: 'BUSINESS_OWNER' },
+        select: { id: true },
+      });
+      if (owners.length) {
+        await this.prisma.notification.createMany({
+          data: owners.map((o) => ({
+            tenantId,
+            userId: o.id,
+            kind:   'WARNING' as const,
+            title:  `Sold below menu price: ${orderNumber}`,
+            body:   what,
+            link:   '/pos/orders',
+          })),
+        });
+      }
+      void this.telegramAlerts?.pricesBelowMenu(tenantId, orderId, flags);
+    } catch (err) {
+      console.warn(`[orders] Price check failed for order ${orderId}: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   // ─── Void order (same-day; CASHIER requires supervisor co-auth) ─────────

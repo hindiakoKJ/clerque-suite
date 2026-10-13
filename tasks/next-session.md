@@ -32,12 +32,13 @@ Open, in this order:
    false in `apps/api/src/auth/published-passwords.ts` and push. 2FA for that
    account when he is at a computer (QR scan), and save the backup codes:
    its .test address cannot receive a reset link.
-2. **Till prices are trusted from the browser.** Not switched to a hard
-   refusal: offline replays after a price change, promos, manager discounts
-   and price lists would be refused at Carolina. Proposed: record and alert
-   the owner (Telegram) on any line below its menu price that no promo or
-   approved discount explains; refuse later, on live online sales only.
-   Needs KJ's word.
+2. **Till prices** (done 13 Oct, KJ's yes): the server still books a till
+   line as sent, but after every till sale it compares each line with the
+   owner's prices (product or size + add-ons) and any promo discount with
+   the shop's active promos (orders/price-check.ts). A line below menu goes
+   to the audit log (PRICE_ADJUSTED on the Order), each owner's bell and
+   the Telegram sales chat. Nothing is refused: an offline till that missed
+   a price change still sends the old price, and the alert says so.
 3. Then: cross-shop ids accepted on bank reconciliation, pre-orders,
    laundry, rentals, modifiers and manual journals; tokens in localStorage
    (move to httpOnly cookies); email verification at sign-up; Sentry

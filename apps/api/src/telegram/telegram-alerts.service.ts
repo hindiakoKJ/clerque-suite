@@ -7,8 +7,9 @@ import { AlertTopic, TelegramLinksService } from './telegram-links.service';
 import { lastPricedLines } from '../procure/procure-notes';
 import {
   RequestForAlert, SaleForAlert, WeeklyCountForAlert, boughtMessage, buyListSentMessage, buyListUpdatedMessage, dailyUsageMessage, photoCaption,
-  postedMessage, saleMessage, weeklyCountMessage,
+  postedMessage, priceBelowMenuMessage, saleMessage, weeklyCountMessage,
 } from './messages';
+import type { PriceFlag } from '../orders/price-check';
 
 /**
  * The alerts a shop's owners and managers get on Telegram.
@@ -87,6 +88,32 @@ export class TelegramAlertsService {
    * `lines` are the ones the buy-list email already worked out, in packs where Clerque knows the pack.
    * `byLabel` names the sender when it is not a person to look up: "Kitchen screen", "Clerque at closing time".
    */
+  /** Lines of a till sale that came in under the owner's prices (orders/price-check.ts). */
+  pricesBelowMenu(tenantId: string, orderId: string, flags: PriceFlag[]): Promise<void> {
+    return this.fire('price', tenantId, 'sales', async () => {
+      const order = await this.prisma.order.findFirst({
+        where:  { id: orderId, tenantId },
+        select: {
+          orderNumber: true, branchId: true, paidAt: true, createdAt: true,
+          branch: { select: { name: true } }, tenant: { select: { name: true } }, createdBy: { select: { name: true } },
+        },
+      });
+      if (!order) return;
+      const chats = await this.links.recipients(tenantId, order.branchId, 'sales');
+      if (chats.length === 0) return;
+      const text = priceBelowMenuMessage({
+        shopName:    order.tenant.name,
+        branchName:  order.branch?.name ?? null,
+        orderNumber: order.orderNumber,
+        cashierName: order.createdBy?.name ?? null,
+        rungAt:      order.paidAt ?? order.createdAt,
+        late:        order.paidAt != null && order.createdAt.getTime() - order.paidAt.getTime() > 5 * 60_000,
+        flags,
+      });
+      for (const chat of chats) this.client.sendMessage(chat, text);
+    });
+  }
+
   buyListSent(
     tenantId: string, requestId: string, lines: Array<{ name: string; amount: string }>, sentById: string | null,
     byLabel: string | null = null,

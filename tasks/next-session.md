@@ -91,6 +91,30 @@ KJ's call (`inventory.service.ts`, `adjust`).
 
 Next: the Play app (phases 3-4 of the inventory plan), after KJ's word.
 
+## Production-readiness check (13 Oct, read-only, 7 areas)
+
+Verdict: NOT production grade yet, even leaving Inventory aside. Full
+report with evidence (describes weak spots, so it is NOT in this public
+repo): `E:\AI Projects\Clerque - Production readiness - 2026-10-13.md`.
+Fixed since: sales on account counted as drawer cash (b3ebe47).
+Worst open items, in plain words:
+1. No backup of the production database has ever existed (workflow off,
+   no secrets, no S3).
+2. This repo is PUBLIC and holds Cafe Carolina's recipe costs and margins
+   (onboarding/*.xlsx) and Clerque's pricing files; the platform admin's
+   seeded password is in its history. Making the repo private needs KJ.
+3. Database in Europe, API in Singapore: 8-12 s per sale.
+4. Offline sales can be stranded (refused once = parked forever, Delete is
+   the only button) and the drawer closed without them.
+5. Nothing alerts anyone when Clerque breaks (no error tracking wired).
+6. Cross-shop ids still accepted (bank recon, pre-orders, laundry, rentals,
+   modifiers, manual journal); the "replayed offline" flag is set by the
+   till, so a cashier can skip the tag rules and credit limits.
+7. Sales on account: a refund pays cash and leaves the customer owing;
+   collection only in Ledger; Clerque cannot issue a BIR-valid invoice
+   (keep the ATP booklet).
+8. No email is sent in production, so "Forgot password" cannot work.
+
 ## Waiting on KJ, in this order
 
 0. **Railway auto-deploy:** pushes after 29 Sept did not deploy; KJ ran

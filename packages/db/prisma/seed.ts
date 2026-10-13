@@ -21,7 +21,10 @@ const TENANT_SLUG     = 'demo';            // used as "Company Code" on login
 const BRANCH_NAME     = 'Main Branch';
 const OWNER_NAME      = 'Admin';
 const OWNER_EMAIL     = 'admin@demo.com';
-const OWNER_PASSWORD  = 'Admin1234!';      // change after first login
+// Local dev only. The literal passwords that used to sit here were published
+// with this repo, and production refuses them (apps/api/src/auth/published-passwords.ts).
+const OWNER_PASSWORD  = process.env.DEMO_SEED_PASSWORD ?? '';
+if (!OWNER_PASSWORD) throw new Error('Set DEMO_SEED_PASSWORD (12+ characters) to seed the local demo shop.');
 // ────────────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -83,7 +86,7 @@ async function main() {
   console.log(`  User: ${owner.name} <${owner.email}> (role: ${owner.role})`);
 
   // ── Demo Cashier ──────────────────────────────────────────────────────────
-  const cashierHash = await bcrypt.hash('Cashier1234!', 12);
+  const cashierHash = await bcrypt.hash(OWNER_PASSWORD, 12);
 
   const cashier = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: tenant.id, email: 'cashier@demo.com' } },
@@ -191,9 +194,9 @@ async function main() {
   console.log('─────────────────────────────────────────');
   console.log(`  Company Code : ${TENANT_SLUG}`);
   console.log(`  Owner email  : ${OWNER_EMAIL}`);
-  console.log(`  Owner pw     : ${OWNER_PASSWORD}  ← change this`);
+  console.log('  Owner pw     : DEMO_SEED_PASSWORD');
   console.log(`  Cashier email: cashier@demo.com`);
-  console.log(`  Cashier pw   : Cashier1234!       ← change this`);
+  console.log('  Cashier pw   : DEMO_SEED_PASSWORD');
   console.log('─────────────────────────────────────────');
 }
 

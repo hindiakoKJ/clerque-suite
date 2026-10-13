@@ -2,6 +2,7 @@ import {
   Injectable, BadRequestException, NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { pharmacistPinAttempts } from '../auth/pin-attempts';
 import type { Prisma } from '@prisma/client';
 
 /**
@@ -29,8 +30,12 @@ export class PharmacyService {
   /**
    * Sprint 19 — Look up a User by kioskPin within the tenant. Returns just
    * enough info for the till's Verify Rx modal to render "✓ Verified by
-   * RPh [name]". Errors are coarse (no per-failure enumeration that would
-   * leak which PINs map to which staff).
+   * RPh [name]".
+   *
+   * Only an active pharmacist's PIN matches, and every miss gets the same
+   * answer. It used to say NOT_PHARMACIST or INACTIVE for a right PIN, so a
+   * cashier could try 0000-9999 and learn every PIN in the shop -- and the
+   * owner's PIN signs in as the owner. Misses are also capped per shop.
    */
   async verifyAttestPin(tenantId: string, pin: string): Promise<{
     valid:           boolean;
@@ -41,13 +46,13 @@ export class PharmacyService {
     if (!pin || !/^\d{4,8}$/.test(pin)) {
       return { valid: false, reason: 'PIN_NOT_FOUND' };
     }
+    const attempt = pharmacistPinAttempts.startTry(tenantId);
     const user = await this.prisma.user.findFirst({
-      where:  { tenantId, kioskPin: pin },
-      select: { name: true, prcLicense: true, isActive: true },
+      where:  { tenantId, kioskPin: pin, isActive: true, prcLicense: { not: null } },
+      select: { name: true, prcLicense: true },
     });
-    if (!user)            return { valid: false, reason: 'PIN_NOT_FOUND' };
-    if (!user.isActive)   return { valid: false, reason: 'INACTIVE' };
-    if (!user.prcLicense) return { valid: false, reason: 'NOT_PHARMACIST' };
+    if (!user?.prcLicense) return { valid: false, reason: 'PIN_NOT_FOUND' };
+    attempt.succeeded();
     return { valid: true, pharmacistName: user.name, prcLicense: user.prcLicense };
   }
 

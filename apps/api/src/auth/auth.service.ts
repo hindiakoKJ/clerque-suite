@@ -15,6 +15,7 @@ import { AccountsService } from '../accounting/accounts.service';
 import { SubscriptionPaymentsService } from '../subscription-payments/subscription-payments.service';
 import { assertPinPolicy } from './pin-policy';
 import { tillPinAttempts } from './pin-attempts';
+import { isPublishedPassword } from './published-passwords';
 import { assertPasswordPolicy } from './password-policy';
 import { resolveAiQuota } from '../ai/ai-availability';
 import { JwtPayload, AuthTokens, AppAccessEntry, DEFAULT_APP_ACCESS, taxStatusFlags, PLAN_FEATURES, PLAN_LIMITS, DEFAULT_PLAN_CODE, normalizePlanCode, planFeaturesFor, planLimitsFor } from '@repo/shared-types';
@@ -435,6 +436,14 @@ export class AuthService {
       return null;
     }
 
+    // A password published in the public repo opens nothing in production,
+    // even when it is the right one (see published-passwords.ts).
+    if (process.env.NODE_ENV === 'production' && isPublishedPassword(password, user.role)) {
+      throw new ForbiddenException(
+        'This password was published by mistake and can no longer be used. Ask Clerque support to reset it.',
+      );
+    }
+
     return user;
   }
 
@@ -467,7 +476,9 @@ export class AuthService {
     }
 
     const user = await this.prisma.user.findFirst({
-      where: { email: email.toLowerCase().trim(), isActive: true, tenantId: tenant.id },
+      // The platform admin never signs in with a till PIN. Its row sits inside
+      // a customer shop, where that shop's owner could otherwise set its PIN.
+      where: { email: email.toLowerCase().trim(), isActive: true, tenantId: tenant.id, role: { not: 'SUPER_ADMIN' } },
       select: {
         id:           true,
         tenantId:     true,

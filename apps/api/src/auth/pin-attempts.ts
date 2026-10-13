@@ -116,6 +116,18 @@ export const tillPinAttempts = new PinAttempts(
     'or sign in with your email and password.',
 );
 
+/**
+ * The pharmacist PIN a prescription sale is attested with. The till checks it
+ * as the PIN is typed (4, 5, 6... digits), so a 6-digit PIN can spend two
+ * misses before it matches; a match clears the count, hence 10, not 5.
+ */
+export const pharmacistPinAttempts = new PinAttempts(
+  10,
+  FIFTEEN_MINUTES,
+  (m) =>
+    `Too many wrong pharmacist PINs. Try again in ${minutes(m)}.`,
+);
+
 /** The 4-digit code a kitchen, bar or customer screen is paired with. */
 export const pairingCodeAttempts = new PinAttempts(
   10,

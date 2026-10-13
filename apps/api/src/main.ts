@@ -23,6 +23,11 @@ initSentry();
 
 // ── Bootstrap seed — runs on every start; upsert-safe, no duplicates ─────────
 async function runSeed(logger: Logger) {
+  const seedPassword = process.env.DEMO_SEED_PASSWORD;
+  if (!seedPassword) {
+    logger.warn('Demo seed skipped: set DEMO_SEED_PASSWORD to create the demo accounts.', 'Bootstrap');
+    return;
+  }
   const prisma = new PrismaClient();
   try {
     const SLUG = 'demo';
@@ -108,7 +113,7 @@ async function runSeed(logger: Logger) {
     // 1) Tenant owner — admin@demo.com
     await ensureUser({
       email: EMAIL,
-      password: 'Admin1234!',
+      password: seedPassword,
       name: 'Admin',
       role: 'BUSINESS_OWNER',
       branchId: branch.id,
@@ -125,7 +130,7 @@ async function runSeed(logger: Logger) {
     //    duplicates if the email exists in another tenant.
     await ensureUser({
       email: 'super@clerque.test',
-      password: 'Super1234!',
+      password: seedPassword,
       name: 'Platform Super Admin',
       role: 'SUPER_ADMIN',
       branchId: null,
@@ -140,7 +145,7 @@ async function runSeed(logger: Logger) {
     // 3) Demo cashier — cashier@demo.com
     await ensureUser({
       email: 'cashier@demo.com',
-      password: 'Cashier1234!',
+      password: seedPassword,
       name: 'Demo Cashier',
       role: 'CASHIER',
       branchId: branch.id,
@@ -327,12 +332,12 @@ async function bootstrap() {
   await app.listen(port);
   logger.log(`🚀 Clerque API running on port ${port}`);
 
-  // SecAudit 2026-05 C14 — runSeed plants hardcoded `Admin1234!`,
-  // `Super1234!`, `Cashier1234!` credentials and is meant only for the
-  // local dev demo tenant. Running in production = an attacker who
-  // knows the seed creds can sign in as SUPER_ADMIN. Gate by NODE_ENV
-  // AND an explicit opt-in env var so staging environments don't seed
-  // by accident either.
+  // SecAudit 2026-05 C14 — runSeed plants demo accounts (one of them a
+  // SUPER_ADMIN) and is meant only for the local dev demo tenant. Gate by
+  // NODE_ENV AND an explicit opt-in env var so staging environments don't
+  // seed by accident either. The password comes from DEMO_SEED_PASSWORD:
+  // the literal ones that used to sit here were published with this repo
+  // and are refused at sign-in in production (auth/published-passwords.ts).
   if (process.env.NODE_ENV !== 'production' && process.env.ENABLE_DEMO_SEED === '1') {
     await runSeed(logger);
   } else if (process.env.NODE_ENV === 'production') {

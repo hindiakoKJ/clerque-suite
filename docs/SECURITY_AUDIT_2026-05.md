@@ -50,7 +50,7 @@
 | C11 | Low | Refresh rotation | `apps/api/src/auth/auth.service.ts:688-728` | No reuse detection. If a revoked refresh token is presented, no alarm raised. | On bcrypt match against `REVOKED` session, revoke all sessions for that user + alert. |
 | C12 | Low | bcrypt cost | `auth.service.ts:1113` | Supervisor PIN at cost 10 over 10K space — brute-forceable in seconds if hash leaks. | Raise to cost 12; or pepper with server secret. |
 | C13 | Low | Counter token storage | `apps/counter/src/auth/AuthProvider.tsx:65-67` | JWT in SecureStore (good); user/tenant objects in AsyncStorage (unencrypted). Low-impact info leak on rooted Android. | Optional: move to SecureStore for consistency. |
-| C14 | Info | Demo seed | `apps/api/src/main.ts:111-153` | `Admin1234!`, `Super1234!`, `Cashier1234!` hardcoded; seeds every boot including production if `runSeed` flag set. | Gate `runSeed` behind `NODE_ENV !== 'production'`. |
+| C14 | Info | Demo seed | `apps/api/src/main.ts:111-153` | Demo passwords hardcoded (since removed; refused in production); seeds every boot including production if `runSeed` flag set. | Gate `runSeed` behind `NODE_ENV !== 'production'`. |
 
 **Strengths**: Prisma everywhere (no raw SQL); `forbidNonWhitelisted` global ValidationPipe; helmet + HSTS; bcrypt rounds 12 for passwords; per-account lockout; reset tokens stored as SHA-256; supervisor PIN per-actor rate limit; typed-slug mass-session-revoke; Counter uses SecureStore.
 

@@ -9,7 +9,7 @@ Play Console requires:
 
 Boot Counter on a Galaxy Tab A8 with the **demo** tenant seeded (run
 `npm run seed` in `packages/db` and sign in as `admin@demo.com` /
-`Admin1234!`). Then walk these screens in order — Android's built-in
+the demo password). Then walk these screens in order — Android's built-in
 screenshot tool gives you the right resolution.
 
 1. **Hero — Cashier till with cart** (F&B vertical, cart panel showing

@@ -16,7 +16,8 @@ import type { Response as ExpressResponse } from 'express';
 import { AuthService } from './auth.service';
 import { TwoFactorService } from './two-factor.service';
 import { RefreshDto, LogoutDto, PinLoginDto } from './dto/login.dto';
-import { UnauthorizedException } from '@nestjs/common';
+import { UnauthorizedException, ForbiddenException } from '@nestjs/common';
+import { recentFailedLogins, MAX_FAILED_ATTEMPTS, LOCKOUT_MINUTES } from './lockout';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtPayload } from '@repo/shared-types';
@@ -97,6 +98,10 @@ export class AuthController {
    * + a 6-digit TOTP code (or 10-char backup code). On success, issues real
    * JWTs identical to the no-2FA path.
    */
+  // A 6-digit code is a million guesses; without these limits it fell in
+  // hours at the global 600/minute. The IP limit slows one machine, and the
+  // account lockout below stops a spread of machines on one account.
+  @Throttle({ short: { ttl: 60_000, limit: 5 } })
   @Post('login/2fa')
   @HttpCode(HttpStatus.OK)
   async loginWith2fa(
@@ -116,8 +121,23 @@ export class AuthController {
     if (payload.kind !== '2fa-challenge') {
       throw new UnauthorizedException('Bad challenge token.');
     }
+    // Wrong codes count toward the same lockout as wrong passwords.
+    if (await recentFailedLogins(this.prisma, payload.sub) >= MAX_FAILED_ATTEMPTS) {
+      throw new ForbiddenException(
+        `Account locked after ${MAX_FAILED_ATTEMPTS} failed attempts. Try again in ${LOCKOUT_MINUTES} minutes.`,
+      );
+    }
     const ok = await this.twoFactor.verify(payload.sub, body.code);
-    if (!ok) throw new UnauthorizedException('Invalid 2FA code.');
+    if (!ok) {
+      const who = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { email: true } });
+      await this.prisma.loginLog.create({
+        data: {
+          userId: payload.sub, tenantId: payload.tenantId ?? null, email: who?.email ?? '',
+          success: false, reason: '2FA_CODE_WRONG', ipAddress: req.ip,
+        },
+      });
+      throw new UnauthorizedException('Invalid 2FA code.');
+    }
 
     const deviceInfo = req.headers['user-agent'];
     const ipAddress  = req.ip;

@@ -23,6 +23,9 @@ const ONE_BRANCH_ROLES = new Set([
 
 export { CreateUserDto, UpdateUserDto, StaffRole };
 
+/** The platform admin is never one of a shop's staff, whichever shop holds its row. */
+const NOT_PLATFORM_ADMIN = { role: { not: 'SUPER_ADMIN' as const } };
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -97,7 +100,11 @@ export class UsersService {
     const canViewSalary = hasPermission(callerRole, 'payroll:view_salary');
 
     const user = await this.prisma.user.findFirst({
-      where: { id, tenantId },
+      // NOT_PLATFORM_ADMIN: the platform admin's row lives inside a customer
+      // shop (the oldest one) but is not that shop's staff. Update and reset
+      // call this first, so hiding it here also closes "the shop owner resets
+      // the platform admin's password or sets its PIN, then signs in as it".
+      where: { id, tenantId, ...NOT_PLATFORM_ADMIN },
       select: {
         id: true,
         name: true,
@@ -397,7 +404,7 @@ export class UsersService {
     // the write itself so no window exists where a different tenant's record could
     // be modified even if the id happened to match.
     const result = await this.prisma.user.updateMany({
-      where: { id, tenantId },
+      where: { id, tenantId, ...NOT_PLATFORM_ADMIN },
       data: {
         ...(dto.name     !== undefined ? { name:     dto.name }     : {}),
         ...(dto.role     !== undefined ? { role:     dto.role }     : {}),
@@ -518,7 +525,7 @@ export class UsersService {
 
   async resetPassword(tenantId: string, id: string, newPassword: string) {
     const target = await this.prisma.user.findFirst({
-      where: { id, tenantId }, select: { email: true, name: true },
+      where: { id, tenantId, ...NOT_PLATFORM_ADMIN }, select: { email: true, name: true },
     });
     if (!target) throw new NotFoundException('User not found.');
     // SECURITY D3-05 — enforce password policy on admin-driven resets too.
@@ -527,7 +534,7 @@ export class UsersService {
 
     // HIGH-1 TOCTOU fix: updateMany with compound { id, tenantId } for atomic tenant scope.
     await this.prisma.user.updateMany({
-      where: { id, tenantId },
+      where: { id, tenantId, ...NOT_PLATFORM_ADMIN },
       data: { passwordHash },
     });
 

@@ -27,6 +27,7 @@
  *     the mass-session-revocation endpoint.
  */
 import { BadRequestException } from '@nestjs/common';
+import { isPublishedPassword } from './published-passwords';
 
 const MIN_LENGTH = 12;
 
@@ -101,6 +102,10 @@ export function assertPasswordPolicy(
     throw new BadRequestException(
       'This password appears in known breach lists. Pick something distinctive — try a passphrase of 4+ random words.',
     );
+  }
+  // The demo passwords published in the public repo (published-passwords.ts).
+  if (isPublishedPassword(password)) {
+    throw new BadRequestException('That password was published and is not safe. Pick a new one.');
   }
   // Email-local / full-email rejection
   if (ctx.email) {

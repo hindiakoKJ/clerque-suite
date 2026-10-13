@@ -4,7 +4,7 @@
 > 20–25 minute pitch to a prospective MSME owner / accountant.
 >
 > **Prep before demo (one-time):**
-> 1. Sign in as `admin@demo.com / Admin1234!`
+> 1. Sign in as `admin@demo.com` with the demo password
 > 2. Settings → Subscription → click **"Seed Test Users"** (creates 14 role
 >    accounts + customers + vendors + sample products + 12 sales orders +
 >    1 open AR invoice + 1 open AP bill with WHT)
@@ -139,7 +139,7 @@
 ## Part 3 — Ledger Demo (10 min)
 
 ### Sign in as Owner
-- Sign out, sign back in as `admin@demo.com / Admin1234!`
+- Sign out, sign back in as `admin@demo.com` with the demo password
 - Tap **Ledger** card on the app picker
 
 ### Operations Health Dashboard
@@ -335,7 +335,7 @@ After running **Settings → Subscription → Seed Test Users**:
 
 | Role | Email | Password | PIN |
 |---|---|---|---|
-| Owner | `admin@demo.com` | `Admin1234!` | — |
+| Owner | `admin@demo.com` | (demo password) | — |
 | Owner (alt) | `businessowner@demo.test` | `Test1234!` | `1234` |
 | Cashier | `cashier@demo.test` | `Test1234!` | `1234` |
 | Sales Lead | `saleslead@demo.test` | `Test1234!` | `1234` |

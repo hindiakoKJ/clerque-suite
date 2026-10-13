@@ -38,6 +38,15 @@ While merging, I checked the code (paths are under E:\AI Projects\app-suite). Fi
 - An offline phone can sell a tag that was already sold. The app can only alert afterwards, which is why engines and half-cuts must sell online.
 - Until Phase 3, stripping an engine or half-cut is caught by photos and people, not refused by the app. Friend pricing is already blocked in Phase 1, but only if nobody except the owner holds a supervisor PIN.
 
+## What already happened, and what catches it
+
+The theft at the shop came to light when a customer returned a part that had never been rung up: a staff member sold it off the books and kept the money. Only the customer coming back revealed it. The plan makes that detection certain instead of lucky:
+
+1. **The customer becomes the checker.** The receipt prints the part's tag number and "Warranty, returns and engine papers are valid only with this receipt"; a counter sign says "No receipt, no warranty. Ask for your receipt." Customers then insist on a receipt, which forces the sale to be rung up. (Hidden defects stay the seller's duty by law, Civil Code Art. 1561, so this is about proof of purchase from this shop, not refusing defect claims.)
+2. **A return checks the tag.** Returns are owner-only and go through the tag number. A tag that was never sold refuses the return and alerts the owner at once: "Tag 0457 returned but never sold: possible off-book sale", with when the part was last seen in a count and which shifts ran since, so the suspects are one or two shifts, not everyone. (Phase 1: the refusal and the Telegram alert; Phase 2: "last seen" from the stored roll calls.)
+3. **The count finds it before the customer does.** An off-book sale leaves the tag "in stock" while the part is gone, so the daily roll call (engines, half-cuts, frame pieces, the cabinet) and the weekly one (everything else) list it missing.
+4. **Cash is the weak spot.** QR/e-wallet payments leave a trail; cash does not. Nudging customers to the business QR (a small discount, say) is the owner's call.
+
 ## How each kind of part is tagged
 
 | Part | How it is tagged | What Clerque enforces |

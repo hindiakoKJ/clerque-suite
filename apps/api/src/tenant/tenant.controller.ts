@@ -161,12 +161,13 @@ export class TenantController {
   @Roles('BUSINESS_OWNER')
   @Post('logo')
   @HttpCode(HttpStatus.OK)
-  // busboy refuses a file that REACHES its limit, so the limit is one byte
-  // over: a file of exactly 1 MB is accepted, anything bigger is refused
-  // with LogoTooLargeMessage's wording before more of it is buffered.
+  // A file of exactly 1 MB is accepted, anything bigger is refused with
+  // LogoTooLargeMessage's wording before more of it is buffered. busboy
+  // refuses a file that REACHES its limit; multer 2.4 adds that byte itself,
+  // so the limit is the real size (it was MAX + 1 on multer 2.1).
   @UseInterceptors(
     LogoTooLargeMessage,
-    FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_LOGO_BYTES + 1, files: 1 } }),
+    FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_LOGO_BYTES, files: 1 } }),
   )
   uploadLogo(
     @CurrentUser() user: JwtPayload,

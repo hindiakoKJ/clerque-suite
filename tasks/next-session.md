@@ -44,6 +44,20 @@ Open, in this order:
    (move to httpOnly cookies); email verification at sign-up; Sentry
    scrubbing; CSP without unsafe-inline/eval.
 
+## Clerque Inventory, phase 1 (live 13 Oct)
+
+Plan: `tasks/inventory-and-mobile-plan.md`; API contract:
+`tasks/inventory-phase1-api.md`; the shop it is for:
+`tasks/surplus-autoparts-plan.md`. Shipped `a3397c4` (API) and `462575a`
+(web): tags on one-of-a-kind parts (printed 6-digit labels, photos, owner
+costs each piece), sold once by number at the retail till at their own cost,
+with the theft rules. The Inventory card shows at RETAIL shops only (the
+token now carries businessType; older sessions see it after re-login).
+Cafes are unchanged. Checked end to end on a local copy, books included.
+Local test shop: `surplus-local` (accounts in the gitignored apps/api/.env).
+Next by the plan: phase 2 (counts by number, owner write-offs, daily
+summary; no migration), then the Play app (phases 3-4).
+
 ## Waiting on KJ, in this order
 
 0. **Railway auto-deploy:** pushes after 29 Sept did not deploy; KJ ran

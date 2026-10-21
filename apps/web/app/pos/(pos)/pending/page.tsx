@@ -3,9 +3,11 @@ import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw, Printer, WifiOff, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import { db } from '@/lib/pos/db';
-import { syncPendingOrders } from '@/lib/pos/sync';
+import { signedInQueueOwner, syncPendingOrders } from '@/lib/pos/sync';
+import { ownsQueuedSale, queueOwnerFrom, splitQueue } from '@/lib/pos/pending-scope';
 import { formatPeso } from '@/lib/utils';
 import { useOnlineStatus } from '@/hooks/pos/useOnlineStatus';
+import { useAuthStore } from '@/store/auth';
 import { toast } from 'sonner';
 
 const METHOD_LABELS: Record<string, string> = {
@@ -30,10 +32,22 @@ export default function PendingOrdersPage() {
   const [syncing, setSyncing] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
 
-  const pendingOrders = useLiveQuery(
-    () => db.pendingOrders.orderBy('queuedAt').reverse().toArray(),
-    [],
-  ) ?? [];
+  // Only this shop's queued sales. On a tablet another shop also uses, that
+  // shop's offline sales (items, PWD/SC ids, customer TINs) wait here too, for
+  // that shop's next sign-in; this shop can neither see nor delete them.
+  const user     = useAuthStore((s) => s.user);
+  const tenantId = user?.tenantId ?? null;
+  const branchId = user?.branchId ?? null;
+  const userId   = user?.sub ?? null;
+  const queue = useLiveQuery(
+    async () => splitQueue(
+      queueOwnerFrom({ tenantId, branchId, sub: userId }),
+      await db.pendingOrders.orderBy('queuedAt').reverse().toArray(),
+    ),
+    [tenantId, branchId, userId],
+  );
+  const pendingOrders = queue?.own ?? [];
+  const othersWaiting = queue?.othersWaiting ?? false;
 
   async function handleSync() {
     if (!isOnline) { toast.error('Cannot sync while offline.'); return; }
@@ -52,6 +66,14 @@ export default function PendingOrdersPage() {
 
   async function handleDelete(id: number) {
     if (!confirm('Remove this pending order from the queue? It will NOT be synced.')) return;
+    // Checked again at the moment of deleting, against the stored sign-in the
+    // sync uses (not this tab's memory): the list could be a render behind a
+    // sign-in made in another tab, and a sale is never removed for another shop.
+    const row = await db.pendingOrders.get(id);
+    if (!row || !ownsQueuedSale(signedInQueueOwner(), row)) {
+      toast.error('That order is not in your shop.');
+      return;
+    }
     await db.pendingOrders.delete(id);
     toast.success('Order removed from queue.');
   }
@@ -128,6 +150,15 @@ export default function PendingOrdersPage() {
           )}
         </div>
       </div>
+
+      {/* Said so nobody "cleans up" the browser and loses another shop's
+          sales. Nothing about them is shown: not how many, not what. */}
+      {othersWaiting && (
+        <p className="px-4 sm:px-6 py-2 text-xs text-muted-foreground border-b border-border">
+          This device also holds offline sales from another shop or another branch.
+          They are kept and will be sent when someone from that shop or branch signs in here.
+        </p>
+      )}
 
       {/* List */}
       {pendingOrders.length === 0 ? (

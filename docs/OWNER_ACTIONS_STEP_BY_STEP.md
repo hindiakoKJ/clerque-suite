@@ -237,7 +237,8 @@ del test-branch-protection.txt
    - Add service → **PostgreSQL** plugin → wait for it to provision.
    - Add service → **GitHub Repo** → connect `hindiakoKJ/clerque-suite` → set branch to a new branch `staging`.
    - Service settings → **Deploy** → set start command (same as prod) → **Variables** copy all prod env vars EXCEPT `DATABASE_URL` (which is set automatically by the Postgres plugin).
-   - Override on staging: `NODE_ENV=staging`, `S3_BUCKET=clerque-backups-staging` (separate bucket so staging snapshots don't contaminate production).
+   - Override on staging: `NODE_ENV=staging`, `S3_BUCKET=clerque-backups-staging`, `BACKUP_S3_BUCKET=clerque-backups-staging`, and clear `S3_PUBLIC_URL` (leave it blank). Staging then keeps its photos and backups in its own private bucket (public access off) and never touches production's. Product photos will not display on staging; that is fine for rehearsals. Also give staging its own R2 API token (`S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`) with access to `clerque-backups-staging` only, so a wrongly copied bucket name still cannot reach production's files.
+   - **Never leave `BACKUP_S3_BUCKET=clerque-backups` on staging.** Copying prod's value would let staging list, download and restore production backups (staff SSS and TIN numbers included) through its admin pages, and its nightly backups would land in production's locked bucket, where they cannot be deleted for 30 days. Every environment needs its own `BACKUP_S3_BUCKET`.
 2. **Vercel side:**
    - `https://vercel.com` → Add New → Project → import `clerque-suite` (it's already imported for prod — go to Settings → Git instead).
    - Or: in the existing project, **Settings → Git → Production Branch** stays `master`. Vercel auto-creates preview deployments for non-master branches → the `staging` branch gets `clerque-suite-git-staging-<your-team>.vercel.app`.

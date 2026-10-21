@@ -131,6 +131,10 @@ export class RecurringBillsService {
       throw new BadRequestException('endDate must be after startDate.');
     }
 
+    // Same check as create(): a new branchId must be this shop's, or every
+    // bill the cron makes from this template would point at another shop.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
+
     return this.prisma.$transaction(async (tx) => {
       if (dto.lines) {
         await tx.recurringBillTemplateLine.deleteMany({ where: { templateId: id } });

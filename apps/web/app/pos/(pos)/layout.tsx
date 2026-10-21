@@ -32,6 +32,7 @@ import { usePendingSync } from '@/hooks/pos/usePendingSync';
 import { closeShift, getShiftSummary } from '@/lib/pos/shifts';
 import { api } from '@/lib/api';
 import { db } from '@/lib/pos/db';
+import { signOut } from '@/lib/session/sign-out';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -102,7 +103,7 @@ function makeNavItem(
 export default function PosLayout({ children }: { children: React.ReactNode }) {
   const router   = useRouter();
   const pathname = usePathname();
-  const { user, accessToken, clear } = useAuthStore();
+  const { user, accessToken } = useAuthStore();
   const { activeShift, clearShift } = useShiftStore();
   const { pendingCount, isSyncing, triggerSync } = usePendingSync();
 
@@ -639,12 +640,9 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   })();
 
   async function doLogout() {
-    const refresh = localStorage.getItem('app-auth');
-    if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
-    clear();
-    clearShift();
-    // Also clear the web-origin mirror cookie (server clears its own HttpOnly copy).
-    document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    // Closes the session and forgets this shop's till (cart, parked sales,
+    // saved shift, screen cache) so the next sign-in on this device starts clean.
+    await signOut();
     router.push('/login');
   }
 

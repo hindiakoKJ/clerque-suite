@@ -10,6 +10,7 @@ import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/prisma-exception.filter';
 import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
 import { ReadOnlyModeInterceptor } from './common/interceptors/read-only-mode.interceptor';
+import { TenantContextInterceptor } from './common/interceptors/tenant-context.interceptor';
 import { PrismaService } from './prisma/prisma.service';
 import { envValidationSchema } from './common/config/env.validation';
 import { PrismaClient } from '@prisma/client';
@@ -276,6 +277,9 @@ async function bootstrap() {
     // Sprint 19 — Tenant read-only kill switch. Resolves PrismaService from
     // the DI container so the interceptor shares the connection pool.
     new ReadOnlyModeInterceptor(app.get(PrismaService)),
+    // The caller's shop for the tenant scope (common/tenant-scope.ts): every
+    // query on a shop table in this request is limited to that shop.
+    new TenantContextInterceptor(),
   );
 
   app.useGlobalPipes(

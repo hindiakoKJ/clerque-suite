@@ -8,6 +8,7 @@ import { AuditService } from '../audit/audit.service';
 import { TelegramClient } from './telegram.client';
 import { LINK_TTL_SECONDS, signLinkCode, verifyLinkCode } from './link-token';
 import { escapeHtml } from './messages';
+import { runAsSystem } from '../common/tenant-context';
 import { LINKABLE_ROLES } from './link-roles';
 
 /**
@@ -305,9 +306,14 @@ export class TelegramLinksService implements OnModuleInit {
     await this.record(user.tenantId!, user.id, 'Telegram alerts linked', null, { telegramUsername: link.telegramUsername });
   }
 
-  /** Unlinks every user on a chat: /stop, the bot blocked, or the chat refusing messages. */
+  /**
+   * Unlinks every user on a chat: /stop, the bot blocked, or the chat refusing messages.
+   * In every shop by design (one phone can serve two shops), so it runs as system work:
+   * the outbox that calls it may be draining inside some other shop's request.
+   */
   async forgetChat(chatId: string): Promise<number> {
-    const res = await this.prisma.telegramLink.updateMany({ where: { chatId }, data: { chatId: null, telegramUsername: null } });
+    const res = await runAsSystem(async () =>
+      await this.prisma.telegramLink.updateMany({ where: { chatId }, data: { chatId: null, telegramUsername: null } }));
     if (res.count > 0) this.logger.log(`Unlinked ${res.count} Clerque user(s) from a Telegram chat that stopped the bot.`);
     return res.count;
   }

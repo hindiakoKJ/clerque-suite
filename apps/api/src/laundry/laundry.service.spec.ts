@@ -18,15 +18,26 @@ const TENANT_A = 'tenant-a';
 function makePrismaMock() {
   const mock: any = {
     tenant: { findUnique: jest.fn() },
+    branch: { findFirst: jest.fn().mockResolvedValue({ id: 'b1' }) },
     laundryOrder: {
       findFirst:  jest.fn(),
       findUnique: jest.fn(),
       update:     jest.fn(),
       updateMany: jest.fn(),
+      create:     jest.fn(async ({ data }: any) => ({ id: 'lo-new', ...data })),
+    },
+    laundryServicePrice: {
+      findMany: jest.fn().mockResolvedValue([
+        { serviceCode: 'WASH', mode: 'FULL_SERVICE', unitPrice: 60 },
+      ]),
     },
     customer: {
+      // Same-shop customer by default; a test returns null for another shop's.
+      findFirst:  jest.fn().mockResolvedValue({ id: 'c1' }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
+    // The POS sale a legacy claim links to. Same-shop by default.
+    order: { findFirst: jest.fn().mockResolvedValue({ id: 'pos-123' }) },
     laundryMachine: {
       findFirst:  jest.fn(),
       update:     jest.fn(),
@@ -35,6 +46,7 @@ function makePrismaMock() {
     },
     laundryPromo: {
       findFirst:  jest.fn(),
+      findMany:   jest.fn().mockResolvedValue([]),
       update:     jest.fn(),
       updateMany: jest.fn(),
       delete:     jest.fn(),
@@ -214,6 +226,137 @@ describe('LaundryService', () => {
 
       await expect(service.claim(TENANT_A, 'o1', 'u-cashier', 'pos-123'))
         .rejects.toThrow(BadRequestException);
+    });
+
+    // P2: the ticket shows the linked sale's number and total, and the link
+    // is unique, so another shop's sale must never be linked.
+    it("refuses another shop's sale id and links nothing", async () => {
+      prisma.laundryOrder.findFirst.mockResolvedValue({
+        id: 'o1', status: 'READY_FOR_PICKUP', customerId: 'c1', isDelivery: false,
+      });
+      prisma.order.findFirst.mockResolvedValue(null); // not in tenant-a
+
+      await expect(service.claim(TENANT_A, 'o1', 'u-cashier', 'pos-from-shop-b'))
+        .rejects.toThrow(new ForbiddenException('That sale is not in your shop.'));
+      expect(prisma.order.findFirst).toHaveBeenCalledWith({
+        where: { id: 'pos-from-shop-b', tenantId: TENANT_A }, select: { id: true },
+      });
+      expect(prisma.laundryOrder.updateMany).not.toHaveBeenCalled();
+      expect(prisma.customer.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("links this shop's own sale exactly as before", async () => {
+      prisma.laundryOrder.findFirst.mockResolvedValue({
+        id: 'o1', status: 'READY_FOR_PICKUP', customerId: null, isDelivery: false,
+      });
+      prisma.laundryOrder.updateMany.mockResolvedValue({ count: 1 });
+      prisma.laundryOrder.findUnique.mockResolvedValue({ id: 'o1' });
+
+      await service.claim(TENANT_A, 'o1', 'u-cashier', 'pos-123');
+      expect(prisma.order.findFirst.mock.calls[0][0].where).toEqual({ id: 'pos-123', tenantId: TENANT_A });
+      expect(prisma.laundryOrder.updateMany.mock.calls[0][0].data.orderId).toBe('pos-123');
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // K1: intake must not take another shop's customer
+  // ─────────────────────────────────────────────────────────────────
+
+  describe('intake — the customer must be one of this shop\'s', () => {
+    const V1 = {
+      branchId: 'b1', serviceType: 'WASH_FOLD' as any, pricingMode: 'PER_LOAD' as any,
+      loadCount: 1, unitPrice: 100,
+    };
+    const V2 = { branchId: 'b1', lines: [{ serviceCode: 'WASH' as any, mode: 'FULL_SERVICE' as any, sets: 1 }] };
+
+    beforeEach(() => {
+      prisma.tenant.findUnique.mockResolvedValue({ businessType: 'LAUNDRY' });
+    });
+
+    it("v1 intake refuses another shop's customer and creates nothing", async () => {
+      prisma.customer.findFirst.mockResolvedValue(null);
+      await expect(service.createOrder(TENANT_A, 'u1', { ...V1, customerId: 'cust-shop-b' }))
+        .rejects.toThrow(ForbiddenException);
+      expect(prisma.customer.findFirst.mock.calls[0][0].where).toEqual({ id: 'cust-shop-b', tenantId: TENANT_A });
+      expect(prisma.laundryOrder.create).not.toHaveBeenCalled();
+    });
+
+    it("v1 intake with this shop's customer, or a walk-in, works as before", async () => {
+      await service.createOrder(TENANT_A, 'u1', { ...V1, customerId: 'c1' });
+      expect(prisma.laundryOrder.create.mock.calls[0][0].data.customerId).toBe('c1');
+
+      prisma.customer.findFirst.mockClear();
+      await service.createOrder(TENANT_A, 'u1', { ...V1 });
+      expect(prisma.customer.findFirst).not.toHaveBeenCalled();
+      expect(prisma.laundryOrder.create.mock.calls[1][0].data.customerId).toBeNull();
+    });
+
+    it("v2 intake refuses another shop's customer and creates nothing", async () => {
+      prisma.customer.findFirst.mockResolvedValue(null);
+      await expect(service.createOrderV2(TENANT_A, 'u1', { ...V2, customerId: 'cust-shop-b' }))
+        .rejects.toThrow(ForbiddenException);
+      expect(prisma.laundryOrder.create).not.toHaveBeenCalled();
+    });
+
+    it("v2 intake with this shop's customer works as before", async () => {
+      await service.createOrderV2(TENANT_A, 'u1', { ...V2, customerId: 'c1' });
+      const data = prisma.laundryOrder.create.mock.calls[0][0].data;
+      expect(data).toMatchObject({ tenantId: TENANT_A, customerId: 'c1', claimNumber: 'CLA-2026-000001' });
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // AUTH-2 / P4: the public stub link must be unguessable
+  // ─────────────────────────────────────────────────────────────────
+
+  describe('public stub token', () => {
+    const V2 = { branchId: 'b1', lines: [{ serviceCode: 'WASH' as any, mode: 'FULL_SERVICE' as any, sets: 1 }] };
+
+    beforeEach(() => {
+      prisma.tenant.findUnique.mockResolvedValue({ businessType: 'LAUNDRY' });
+    });
+
+    it('a new ticket gets 144 random bits, URL-safe, with no trace of the claim number', async () => {
+      const tokens = new Set<string>();
+      for (let i = 0; i < 50; i++) {
+        await service.createOrderV2(TENANT_A, 'u1', V2);
+        const token: string = prisma.laundryOrder.create.mock.calls[i][0].data.publicStubToken;
+        expect(token).toMatch(/^[A-Za-z0-9_-]{24}$/);           // 18 bytes, base64url
+        expect(Buffer.from(token, 'base64url')).toHaveLength(18); // 144 bits
+        expect(token).not.toContain('CLA');
+        expect(token).not.toContain('000001');
+        tokens.add(token);
+      }
+      expect(tokens.size).toBe(50);
+    });
+
+    const STUB = {
+      claimNumber: 'CLA-2026-000001', status: 'READY_FOR_PICKUP', totalAmount: '180.00',
+      tenant: { name: 'Lava Laundry' }, branch: { name: 'Main' },
+      customer: { name: 'Maria Santos', loyaltyVisits: 4 },
+    };
+
+    it('a new link shows the ticket as before, customer name included', async () => {
+      prisma.laundryOrder.findUnique.mockResolvedValue(STUB);
+      await expect(service.getPublicStub('q3V9_xR2kLm8Zt0bWcYd-N1e')).resolves.toEqual(STUB);
+    });
+
+    it('an old guessable link still opens, but without the customer name', async () => {
+      prisma.laundryOrder.findUnique.mockResolvedValue(STUB);
+      const res = await service.getPublicStub('CLA-2026-000001-K7QX');
+      expect(prisma.laundryOrder.findUnique.mock.calls[0][0].where).toEqual({ publicStubToken: 'CLA-2026-000001-K7QX' });
+      expect(res).toMatchObject({ status: 'READY_FOR_PICKUP', totalAmount: '180.00', customer: { loyaltyVisits: 4 } });
+      expect(res.customer).not.toHaveProperty('name');
+    });
+
+    it('an old link for a walk-in (no customer) opens as before', async () => {
+      prisma.laundryOrder.findUnique.mockResolvedValue({ ...STUB, customer: null });
+      await expect(service.getPublicStub('CLA-2026-000001-K7QX')).resolves.toMatchObject({ customer: null });
+    });
+
+    it('an unknown token is a plain 404', async () => {
+      prisma.laundryOrder.findUnique.mockResolvedValue(null);
+      await expect(service.getPublicStub('nope')).rejects.toThrow(NotFoundException);
     });
   });
 

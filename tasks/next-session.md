@@ -199,3 +199,20 @@ Found by the same map, wrong today with or without MariBank:
 - On the real shop: supervisor PIN, hide costs from staff, ledger mode,
   staff accounts, stations, reorder levels, prep items.
 - Telegram: he links his phone (Settings → Telegram alerts).
+
+## Tenant isolation safety net (21 Oct)
+
+Every query on a shop table (108 tables with a required tenantId) made during
+a signed-in shop user's or API key's request now gets "and tenantId = this
+shop" added, and a write naming another shop is refused
+(apps/api/src/common/tenant-scope.ts, tenant-context.ts, the
+TenantContextInterceptor in main.ts). Not covered: raw SQL, nested writes,
+tables without their own tenantId, jobs, sign-in, public routes and the
+platform admin (no context = unscoped, as before). Work that crosses shops on
+purpose inside a request runs in runAsSystem(async () => await ...): the
+await must be inside, a Prisma query runs when awaited. The startup log says
+"Tenant scope: on"; TENANT_SCOPE=off is an emergency switch only. Real-database
+check (local only): `cd apps/api && TENANT_SCOPE_DB_TEST=1 npx jest --testRegex
+'tenant-scope.db-spec.ts$'`. The gaps found on 21 Oct are closed too (report
+outside this repo, as before); ids sent by the screen are still checked in the
+services, the net is the second line.

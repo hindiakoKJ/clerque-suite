@@ -8,6 +8,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { pairingCodeAttempts } from '../auth/pin-attempts';
 import type { DisplayDeviceRole } from '@prisma/client';
 
+/** One answer for a wrong company code and a wrong pairing code alike. */
+const PAIRING_CODE_NOT_FOUND = 'Pairing code not found. Check the company code and the 4-digit code.';
+
 /**
  * Sprint 25 — DisplayPairing service.
  *
@@ -121,7 +124,11 @@ export class DisplayPairingService {
       where: { slug: tenantSlug.toLowerCase().trim() },
       select: { id: true, name: true },
     });
-    if (!tenant) throw new NotFoundException('Tenant not found.');
+    // The same answer as a wrong pairing code for a real business. "Tenant
+    // not found" told an anonymous caller which company codes exist, and the
+    // company code is half of a PIN sign-in. Not counted against anyone: the
+    // limit is keyed on real tenant ids only, never on text a stranger typed.
+    if (!tenant) throw new NotFoundException(PAIRING_CODE_NOT_FOUND);
 
     // The 4-digit code is the only secret here, so guesses are limited:
     // 10 failed codes in 15 minutes for this business, then a wait. Every
@@ -132,7 +139,7 @@ export class DisplayPairingService {
     const row = await this.prisma.displayPairing.findUnique({
       where: { tenantId_code: { tenantId: tenant.id, code: code.trim() } },
     });
-    if (!row)                                  throw new NotFoundException('Pairing code not found.');
+    if (!row)                                  throw new NotFoundException(PAIRING_CODE_NOT_FOUND);
     if (row.redeemedAt)                        throw new BadRequestException('Code already used.');
     if (row.revokedAt)                         throw new BadRequestException('Code revoked.');
     if (row.expiresAt.getTime() < Date.now()) throw new BadRequestException('Code expired — ask for a new one.');

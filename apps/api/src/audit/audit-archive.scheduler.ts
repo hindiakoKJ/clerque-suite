@@ -1,9 +1,11 @@
 /**
  * Sprint 21 — Audit-log immutable archive (closes D8-05).
  *
- * Streams a per-tenant audit-log + login-log snapshot to the same R2/S3
- * bucket that holds the nightly tenant backups, under a separate prefix
- * (`audit-archive/<YYYY-MM-DD>/<tenant-slug>.json`). Runs daily at 02:30
+ * Streams a per-tenant audit-log + login-log snapshot to the R2/S3 bucket
+ * that holds the nightly tenant backups (BACKUP_S3_BUCKET when set, see
+ * storage/private-keys.ts), under a separate prefix
+ * (`audit-archive/<YYYY-MM-DD>/<random>/<tenant-slug>.json`: the random
+ * folder keeps the key unguessable). Runs daily at 02:30
  * UTC — 30 minutes after the main backup so the two don't compete for
  * connection-pool slots.
  *
@@ -20,14 +22,15 @@
  * later (when they discharge D1-06) upgrades the historical archive
  * automatically: every NEW write becomes locked.
  *
- * Configuration: shares S3_BUCKET / S3_ACCESS_KEY_ID etc. with the main
- * backup scheduler. No new env vars.
+ * Configuration: shares the storage settings with the main backup scheduler,
+ * including the optional private backup bucket (BACKUP_S3_BUCKET).
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { unguessableArchiveKey } from '../storage/private-keys';
 
 @Injectable()
 export class AuditArchiveScheduler {
@@ -124,7 +127,7 @@ export class AuditArchiveScheduler {
           auditLog:    auditRows,
           loginLog:    loginRows,
         };
-        const key = `audit-archive/${phDay}/${t.slug}.json`;
+        const key = unguessableArchiveKey('audit-archive', phDay, t.slug);
         await this.storage.putBuffer(
           Buffer.from(JSON.stringify(payload)),
           key,

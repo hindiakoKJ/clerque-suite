@@ -97,6 +97,35 @@ export class PurchaseOrdersService {
     };
   }
 
+  /**
+   * Every ingredient and product a PO line names must be this shop's.
+   *
+   * The line DTO is a plain interface, so nothing upstream checks the ids.
+   * Without this, a line could point at another shop's ingredient or product
+   * and the PO detail would then show its name, unit or SKU. One message for
+   * "missing" and "another shop's" so it says nothing about the other shop.
+   */
+  private async assertLineRefsInTenant(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    items: PurchaseOrderLineInput[],
+  ): Promise<void> {
+    const rawIds  = Array.from(new Set(items.map((i) => i.rawMaterialId).filter((x): x is string => !!x)));
+    const prodIds = Array.from(new Set(items.map((i) => i.productId).filter((x): x is string => !!x)));
+    if (rawIds.length) {
+      const found = await tx.rawMaterial.findMany({ where: { id: { in: rawIds }, tenantId }, select: { id: true } });
+      if (found.length !== rawIds.length) {
+        throw new ForbiddenException('An ingredient on this order is not in your shop.');
+      }
+    }
+    if (prodIds.length) {
+      const found = await tx.product.findMany({ where: { id: { in: prodIds }, tenantId }, select: { id: true } });
+      if (found.length !== prodIds.length) {
+        throw new ForbiddenException('A product on this order is not in your shop.');
+      }
+    }
+  }
+
   /** Tenant-scoped auto-number: PO-{YYYY}-{seq} where seq resets per year. */
   private async nextPoNumber(tenantId: string, year: number, tx: Prisma.TransactionClient): Promise<string> {
     // Find the highest existing seq for this tenant + year by scanning the
@@ -137,6 +166,7 @@ export class PurchaseOrdersService {
         const v = await tx.vendor.findFirst({ where: { id: dto.vendorId, tenantId }, select: { id: true } });
         if (!v) throw new BadRequestException('Vendor does not belong to your tenant.');
       }
+      await this.assertLineRefsInTenant(tx, tenantId, dto.items);
 
       const poNumber = await this.nextPoNumber(tenantId, orderDate.getFullYear(), tx);
 
@@ -189,14 +219,16 @@ export class PurchaseOrdersService {
     // PurchaseOrderItem has no FK relation to RawMaterial / Product — resolve
     // display names in a separate batched query so the detail page can render
     // human-readable rows without an extra round trip per line.
+    // Scoped to the shop: a line saved before the create/update check existed
+    // may still name another shop's item, and its name must not come back.
     const rawIds = Array.from(new Set(po.items.map((i) => i.rawMaterialId).filter((x): x is string => !!x)));
     const prodIds = Array.from(new Set(po.items.map((i) => i.productId).filter((x): x is string => !!x)));
     const [rawMats, products] = await Promise.all([
       rawIds.length
-        ? this.prisma.rawMaterial.findMany({ where: { id: { in: rawIds } }, select: { id: true, name: true, unit: true } })
+        ? this.prisma.rawMaterial.findMany({ where: { id: { in: rawIds }, tenantId }, select: { id: true, name: true, unit: true } })
         : Promise.resolve([] as { id: string; name: string; unit: string }[]),
       prodIds.length
-        ? this.prisma.product.findMany({ where: { id: { in: prodIds } }, select: { id: true, name: true, sku: true } })
+        ? this.prisma.product.findMany({ where: { id: { in: prodIds }, tenantId }, select: { id: true, name: true, sku: true } })
         : Promise.resolve([] as { id: string; name: string; sku: string | null }[]),
     ]);
     const rawById  = new Map(rawMats.map((r) => [r.id, r]));
@@ -239,6 +271,7 @@ export class PurchaseOrdersService {
       if (dto.items) {
         if (!dto.items.length) throw new BadRequestException('PO must have at least one line.');
         money = this.money(dto.items, dto.taxCents ?? existing.taxCents);
+        await this.assertLineRefsInTenant(tx, tenantId, dto.items);
         await tx.purchaseOrderItem.deleteMany({ where: { purchaseOrderId: id } });
       }
 

@@ -18,9 +18,11 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, FuelGrade, FuelDispenseStatus, TankDipKind } from '@prisma/client';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 
 export interface CreatePumpDto {
   branchId:    string;
@@ -92,6 +94,7 @@ export class FuelService {
     });
     if (!product) throw new BadRequestException('Product not found.');
     if (!dto.label?.trim()) throw new BadRequestException('Pump label is required.');
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     try {
       return await this.prisma.fuelPump.create({
@@ -175,6 +178,17 @@ export class FuelService {
       throw new BadRequestException(
         `Opening meter (${dto.openingMeter}) is below the recorded current meter (${Number(pump.currentMeter)}). Did you mistype?`,
       );
+    }
+
+    // A named attendant must be one of this shop's staff: the dispense reads
+    // the attendant's name back. The calling cashier (the default) needs no
+    // lookup.
+    if (dto.attendantId && dto.attendantId !== defaultAttendantId) {
+      const attendant = await this.prisma.user.findFirst({
+        where:  { id: dto.attendantId, tenantId },
+        select: { id: true },
+      });
+      if (!attendant) throw new ForbiddenException('That attendant is not in your shop.');
     }
 
     try {
@@ -272,6 +286,14 @@ export class FuelService {
       throw new NotFoundException('Dispense not found.');
     }
     if (dispense.orderId) return dispense;
+    // The order must be one of this shop's sales. Another shop's order id
+    // folded that sale's total into this shop's reconciliation, and since the
+    // link is unique it also stopped that shop from linking its own sale.
+    const order = await this.prisma.order.findFirst({
+      where:  { id: orderId, tenantId },
+      select: { id: true },
+    });
+    if (!order) throw new ForbiddenException('That sale is not in your shop.');
     return this.prisma.fuelDispense.update({
       where: { id: dispenseId },
       data:  { orderId },
@@ -308,6 +330,7 @@ export class FuelService {
     if (!Number.isFinite(dto.litersOnHand) || dto.litersOnHand < 0) {
       throw new BadRequestException('Liters on hand must be a non-negative number.');
     }
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
     return this.prisma.tankDip.create({
       data: {
         tenantId,
@@ -449,11 +472,13 @@ export class FuelService {
     });
     // FuelDispense → Order is a scalar back-pointer (no Prisma relation
     // because Order.id was set up before fuel landed). Fetch the linked
-    // Orders in a single follow-up query, then index by id.
+    // Orders in a single follow-up query, then index by id. Scoped to the shop
+    // too, so a link written before attachOrder checked the order can never
+    // add another shop's sale to the cash collected here.
     const orderIds = dispenses.map((d) => d.orderId).filter((id): id is string => !!id);
     const orders = orderIds.length > 0
       ? await this.prisma.order.findMany({
-          where: { id: { in: orderIds } },
+          where: { id: { in: orderIds }, tenantId },
           select: { id: true, totalAmount: true },
         })
       : [];

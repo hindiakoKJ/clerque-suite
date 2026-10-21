@@ -18,7 +18,7 @@ import { useRouter } from 'next/navigation';
 import { Sparkles, RotateCcw, LogIn } from 'lucide-react';
 import { isDemoMode, deactivateDemo } from '@/lib/demo/config';
 import { useDemoStore } from '@/lib/demo/store';
-import { useAuthStore } from '@/store/auth';
+import { signOut } from '@/lib/session/sign-out';
 
 export function DemoBanner() {
   const router = useRouter();
@@ -56,8 +56,9 @@ export function DemoBanner() {
   function handleExit() {
     if (confirm('Exit the demo and go to sign in? Your demo data will be cleared.')) {
       deactivateDemo();
-      useAuthStore.getState().clear?.();
-      router.push('/login');
+      // The shared sign-out also empties the screen cache, so a real sign-in
+      // after the demo is not shown demo lists until they refetch.
+      void signOut().finally(() => router.push('/login'));
     }
   }
 

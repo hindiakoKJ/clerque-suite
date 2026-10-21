@@ -4,7 +4,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { Users, Clock, LayoutDashboard, CalendarDays, UserCheck, Timer, FileText, DollarSign, HeartHandshake, Receipt, User as UserIcon, Plane, ClipboardList, Gift } from 'lucide-react';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
-import { api } from '@/lib/api';
+import { signOut } from '@/lib/session/sign-out';
 
 const PAYROLL_ACCENT      = 'hsl(262 70% 58%)';
 const PAYROLL_ACCENT_SOFT = 'hsl(262 70% 58% / 0.08)';
@@ -65,7 +65,7 @@ function makePayNavItem(
 export default function PayrollLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, clear } = useAuthStore();
+  const { user } = useAuthStore();
 
   /*
     Same hydration guard as POS and Ledger. Every nav item below depends on
@@ -118,10 +118,8 @@ export default function PayrollLayout({ children }: { children: React.ReactNode 
   }, []);
 
   async function handleLogout() {
-    const refresh = localStorage.getItem('app-auth');
-    if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
-    clear();
-    document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    // Same sign-out as every app: also forgets the shop's till and screen cache.
+    await signOut();
     router.push('/login');
   }
 

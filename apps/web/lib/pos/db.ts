@@ -38,6 +38,15 @@ export interface PendingOrder {
   id?: number;
   clientUuid: string;
   branchId: string;
+  /**
+   * The shop and the person that rang this sale. A tablet can be shared by two
+   * shops, and only the shop that rang a sale may see, send or delete it (see
+   * lib/pos/pending-scope.ts). Not indexed, so no schema version is needed:
+   * Dexie stores extra fields as they come, and rows queued before these were
+   * recorded simply lack them and are matched by branch instead.
+   */
+  tenantId?: string;
+  userId?: string;
   payload: object;
   receiptSnapshot: object;
   queuedAt: number;

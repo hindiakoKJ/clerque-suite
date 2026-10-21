@@ -19,9 +19,11 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, RentalStatus, SerializedUnitStatus } from '@prisma/client';
+import { assertBranchInTenant, assertCustomerInTenant } from '../common/tenant-fk-guards';
 
 export interface CreateSerializedUnitDto {
   branchId:       string;
@@ -79,6 +81,8 @@ export class RentalsService {
     });
     if (!product) throw new BadRequestException('Product not found.');
     if (!dto.serialNumber?.trim()) throw new BadRequestException('Serial number is required.');
+    // The unit list shows each unit's branch name, so the branch must be ours.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     try {
       return await this.prisma.serializedUnit.create({
@@ -130,6 +134,11 @@ export class RentalsService {
     if (unit.status !== 'IN_STOCK') {
       throw new ConflictException(`Unit is currently ${unit.status}, cannot rent out.`);
     }
+    // The rental list shows the customer's name and phone, so every id the
+    // agreement links to must be this shop's own.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
+    await this.assertOrderInTenant(tenantId, dto.depositOrderId);
 
     return this.prisma.$transaction(async (tx) => {
       const rental = await tx.rentalAgreement.create({
@@ -165,6 +174,8 @@ export class RentalsService {
     if (rental.status !== 'OPEN' && rental.status !== 'OVERDUE') {
       throw new ConflictException(`Cannot return a rental that is ${rental.status}.`);
     }
+
+    await this.assertOrderInTenant(tenantId, dto.returnOrderId);
 
     const damageFee  = Math.max(0, dto.damageFeeCents ?? 0);
     const refundable = Math.max(0, rental.depositCents - damageFee);
@@ -221,5 +232,19 @@ export class RentalsService {
       data: { status: 'OVERDUE' },
     });
     return { flagged: result.count };
+  }
+
+  /**
+   * A sale linked to a rental must be one of this shop's orders. The link is
+   * unique per order, so another shop's order id would also stop that shop
+   * from ever linking its own sale. Absent passes: the link is optional.
+   */
+  private async assertOrderInTenant(tenantId: string, orderId: string | null | undefined): Promise<void> {
+    if (!orderId) return;
+    const order = await this.prisma.order.findFirst({
+      where:  { id: orderId, tenantId },
+      select: { id: true },
+    });
+    if (!order) throw new ForbiddenException('That sale is not in your shop.');
   }
 }

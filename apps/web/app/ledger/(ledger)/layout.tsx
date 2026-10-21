@@ -4,7 +4,7 @@ import { BookOpen, LayoutDashboard, ListOrdered, BookMarked, Zap, Banknote, Land
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
-import { api } from '@/lib/api';
+import { signOut } from '@/lib/session/sign-out';
 
 const LEDGER_ACCENT      = 'hsl(173 70% 40%)';
 const LEDGER_ACCENT_SOFT = 'hsl(173 70% 40% / 0.08)';
@@ -87,7 +87,7 @@ const FULL_BOOKS_LOCK = 'Switch the books to Full in Settings > Ledger mode (the
 
 export default function LedgerLayout({ children }: { children: React.ReactNode }) {
   const router         = useRouter();
-  const { user, clear } = useAuthStore();
+  const { user } = useAuthStore();
 
   /*
     Wait for the auth store to rehydrate before rendering the nav.
@@ -148,10 +148,8 @@ export default function LedgerLayout({ children }: { children: React.ReactNode }
   }, []);
 
   async function handleLogout() {
-    const refresh = localStorage.getItem('app-auth');
-    if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
-    clear();
-    document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    // Same sign-out as every app: also forgets the shop's till and screen cache.
+    await signOut();
     router.push('/login');
   }
 

@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
 import { Prisma, ProjectStatus } from '@prisma/client';
 import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
+import { assertBranchInTenant, assertCustomerInTenant } from '../common/tenant-fk-guards';
 
 export interface CreateProjectDto {
   name:          string;
@@ -86,6 +87,10 @@ export class ProjectsService {
   }
 
   async create(tenantId: string, userId: string, dto: CreateProjectDto) {
+    // The project list shows the customer's and the branch's names, so both
+    // must be this shop's own.
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
     return this.prisma.$transaction(async (tx) => {
       const projectCode = await this.nextProjectCode(tx, tenantId);
       return tx.project.create({

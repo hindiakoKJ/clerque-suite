@@ -1,7 +1,8 @@
 'use client';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { registerQueryClient } from '@/lib/session/shop-state';
 import { Toaster } from 'sonner';
 import { ConfirmSlugModal } from '@/components/admin/ConfirmSlugModal';
 import { SanityConfirmModal } from '@/components/shared/SanityConfirmModal';
@@ -17,6 +18,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
         },
       }),
   );
+
+  // Sign-out empties this cache (lib/session/sign-out.ts). Its query keys
+  // carry no shop, so without that the next shop to sign in on this tab was
+  // shown the last shop's lists until they refetched.
+  useEffect(() => {
+    registerQueryClient(queryClient);
+    return () => registerQueryClient(null);
+  }, [queryClient]);
 
   return (
     <QueryClientProvider client={queryClient}>

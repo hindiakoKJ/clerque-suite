@@ -20,7 +20,9 @@ These are already running in production. Listed for completeness.
 
 **Why this matters:** Railway's filesystem is ephemeral. Every redeploy wipes `./uploads/`. Today, every product image, receipt logo, and document upload lives there. **The next deploy could wipe everything.** Daily backups are also unconfigured, so there's no recovery path from a database disaster.
 
-R2 fixes both with one bucket.
+R2 fixes both, with **two buckets**: one for product photos (which browsers load directly, so it is public) and one for backups (which must never be public).
+
+> **Why two buckets.** R2 public access opens the *whole* bucket. It cannot be limited to one folder. The nightly backup holds a shop's entire data: staff with SSS, PhilHealth, Pag-IBIG and TIN numbers and pay, customers, payslips, sales and books. If it sat in the public photo bucket, anyone who found the file could download it. Backup and audit-archive keys also carry a long random part so they cannot be guessed, but that is the second lock, not the first.
 
 ### Cost
 
@@ -30,50 +32,56 @@ R2 fixes both with one bucket.
 
 ### Setup (10 minutes)
 
-1. **Cloudflare dashboard → R2 → Create bucket**
-   - Name: `clerque-prod`
-   - Location: `Asia-Pacific` (closer = faster reads)
-   - Click Create
+1. **Cloudflare dashboard → R2 → Create bucket** (do this twice)
+   - Photos bucket: name `clerque-prod`, location `Asia-Pacific` (closer = faster reads)
+   - Backups bucket: name `clerque-backups`, location `Asia-Pacific`
+   - **Never turn on public access for `clerque-backups`**
 
-2. **Object Lock for ransomware-proof backups**
-   - Bucket → Settings → Object Lock → Enable
+2. **Object Lock for ransomware-proof backups** (on `clerque-backups`)
+   - `clerque-backups` → Settings → Object Lock → Enable
    - Mode: `Compliance` (cannot be disabled even by root)
    - Default retention: 30 days
    - This makes backups truly immutable — even a stolen API key can't delete them
 
-3. **Lifecycle rule for backup rotation**
-   - Bucket → Settings → Lifecycle rules → Add rule
+3. **Lifecycle rule for backup rotation** (on `clerque-backups`)
+   - `clerque-backups` → Settings → Lifecycle rules → Add rule
    - Prefix: `backups/`
    - Action: Delete after 90 days
    - Object Lock keeps the most recent 30 days fully immutable; older daily snapshots roll off automatically
 
-4. **Public access for product images** (optional but recommended)
-   - Bucket → Settings → Public access → Enable for path `public/`
+4. **Public access for product images** (on `clerque-prod` only)
+   - `clerque-prod` → Settings → Public access → Enable
+   - This makes the **whole** `clerque-prod` bucket public, which is why backups are in the other bucket
    - Copy the public URL it gives you (looks like `https://pub-<bucket-id>.r2.dev`)
    - This lets browsers render product images directly without going through the API
 
 5. **Create API token**
    - R2 dashboard → Manage R2 API tokens → Create token
-   - Permissions: `Object Read & Write` on bucket `clerque-prod`
+   - Permissions: `Object Read & Write` on **both** buckets, `clerque-prod` and `clerque-backups`
    - Copy the **Access Key ID**, **Secret Access Key**, and **Endpoint URL**
 
 6. **Set Railway environment variables** (Railway → API service → Variables)
    ```
    S3_BUCKET=clerque-prod
+   BACKUP_S3_BUCKET=clerque-backups
    S3_ACCESS_KEY_ID=<from step 5>
    S3_SECRET_ACCESS_KEY=<from step 5>
    S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
    S3_REGION=auto
    S3_PUBLIC_URL=https://pub-<bucket-id>.r2.dev
    ```
+   Do not set `S3_PUBLIC_URL` without `BACKUP_S3_BUCKET`: backups would then land in the public bucket.
+   Each environment (production, staging, any test copy) needs its own `BACKUP_S3_BUCKET` and must never share production's `clerque-backups`: a staging API pointed at it can list, download and restore production backups, and writes its own into production's locked bucket.
 
 7. **Redeploy the Railway service** — variables don't take effect until the next deploy
 
 8. **Verify** — check Railway logs for:
    ```
    Storage driver: S3 (bucket=clerque-prod, endpoint=https://...)
+   Backups and audit archives: bucket=clerque-backups
    ```
    If you see `Storage driver: LOCAL`, one of the env vars is missing.
+   If you see `Backups and audit archives share the public photo bucket`, `BACKUP_S3_BUCKET` is missing.
 
 ### One-time migration of existing local uploads
 

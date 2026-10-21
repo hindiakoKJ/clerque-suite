@@ -8,8 +8,11 @@
  *     back to the SAME register, not a different one). Network-syncing them
  *     would create cross-terminal recall ambiguity.
  *   - Zero round-trip cost. Park + recall must feel instantaneous.
- *   - Survives browser refresh, but a tenant-scoped clear on logout
- *     prevents leakage between cashier shifts on a shared device.
+ *   - Survives browser refresh, but every sign-out empties it, and so does
+ *     a sign-in by another shop (lib/session/shop-state.ts), so a shared
+ *     device never hands one shop's parked orders (PWD/SC ids and names
+ *     included) to the next. A locked-till handover keeps them for the
+ *     relief cashier of the same shop.
  *
  * Auto-expiry: 24h. Older parked sales are filtered out on every read so
  * they never accumulate as junk in localStorage.

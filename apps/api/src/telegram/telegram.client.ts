@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { webhookSecret } from './link-token';
+import { tenantContext } from '../common/tenant-context';
 
 /**
  * Talks to the Telegram Bot API with Node's own fetch -- no library.
@@ -146,7 +147,7 @@ export class TelegramClient implements OnModuleInit {
     if (!this.enabled) return;
     if (!this.roomFor(chatId)) return;
     this.outbox.push({ kind: 'message', chatId, text: html, attempts: 0 });
-    void this.drain();
+    this.startDrain();
   }
 
   sendPhoto(chatId: string, photo: Buffer, mime: string, captionHtml: string, textIfNoRoom: string): void {
@@ -161,7 +162,7 @@ export class TelegramClient implements OnModuleInit {
     if (!this.roomFor(chatId)) return;
     const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
     this.outbox.push({ kind: 'photo', chatId, photo, mime, filename: `receipt.${ext}`, caption: captionHtml, attempts: 0 });
-    void this.drain();
+    this.startDrain();
   }
 
   /** Leaves a group the bot was added to. Not queued and not retried: it is housekeeping, not an alert. */
@@ -192,6 +193,16 @@ export class TelegramClient implements OnModuleInit {
   /** Resolves when the outbox is empty. For tests. */
   async idle(): Promise<void> {
     while (this.draining || this.outbox.length > 0) await new Promise((r) => setTimeout(r, 5));
+  }
+
+  /**
+   * The outbox is one queue for every shop, drained by one loop. It starts
+   * outside any shop's request context, so the loop (and forgetChat, which it
+   * calls when a chat blocks the bot) is never scoped to whichever shop's
+   * request happened to queue the first message.
+   */
+  private startDrain(): void {
+    void tenantContext.exit(() => this.drain());
   }
 
   private async drain() {

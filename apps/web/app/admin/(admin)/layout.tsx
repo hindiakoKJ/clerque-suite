@@ -4,14 +4,14 @@ import { ShieldCheck, LayoutDashboard, Building2, AlertCircle, User, Receipt, Ba
 import { useRouter } from 'next/navigation';
 import { AppShell, type NavItem } from '@/components/shell/AppShell';
 import { useAuthStore } from '@/store/auth';
-import { api } from '@/lib/api';
+import { signOut } from '@/lib/session/sign-out';
 
 const ACCENT      = 'hsl(330 70% 45%)';   // magenta — distinct from POS / Ledger / Sync
 const ACCENT_SOFT = 'hsl(330 70% 45% / 0.10)';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router       = useRouter();
-  const { user, clear } = useAuthStore();
+  const { user } = useAuthStore();
 
   useEffect(() => {
     const root = document.documentElement;
@@ -31,10 +31,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }, [user, router]);
 
   async function handleLogout() {
-    const refresh = localStorage.getItem('app-auth');
-    if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
-    clear();
-    document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    // Same sign-out as every app, so Console's screen cache (every shop's
+    // tenant list) is not left for whoever signs in next on this browser.
+    await signOut();
     router.push('/login');
   }
 

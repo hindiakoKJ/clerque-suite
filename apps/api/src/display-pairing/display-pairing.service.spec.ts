@@ -146,8 +146,31 @@ describe('DisplayPairingService', () => {
     it('an unknown company code is not counted against anyone', async () => {
       const { svc } = build({ tenant: null });
       for (let i = 0; i < 20; i++) {
-        await expect(svc.redeem('nope', '1111')).rejects.toThrow('Tenant not found.');
+        await expect(svc.redeem('nope', '1111')).rejects.toThrow(NotFoundException);
       }
+    });
+
+    it('an unknown company code gets exactly the answer a wrong code for a real business gets', async () => {
+      // A stranger must not learn which company codes exist on Clerque.
+      const real = build();
+      const wrongCode = await real.svc.redeem('carolina', '1111').catch((e) => e);
+      const fake = build({ tenant: null });
+      const noSuchShop = await fake.svc.redeem('no-such-shop', '1111').catch((e) => e);
+
+      expect(noSuchShop).toBeInstanceOf(NotFoundException);
+      expect(noSuchShop.getStatus()).toBe(wrongCode.getStatus());
+      expect(noSuchShop.getResponse()).toEqual(wrongCode.getResponse());
+      expect(noSuchShop.message).not.toMatch(/tenant/i);
+      expect(fake.prisma.displayPairing.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('the right company code and pairing code still pair', async () => {
+      const { svc, prisma } = build();
+      prisma.displayPairing.findUnique.mockResolvedValueOnce(LIVE);
+      prisma.displayPairing.update.mockResolvedValueOnce({ ...LIVE, redeemedAt: new Date() });
+      await expect(svc.redeem('Carolina ', '4821')).resolves.toMatchObject({
+        tenantId: TENANT, tenantName: 'Carolina', stationId: 'st-kitchen', deviceToken: expect.stringMatching(/^[0-9a-f]{32}$/),
+      });
     });
   });
 });

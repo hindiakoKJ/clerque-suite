@@ -5,6 +5,7 @@ import { JournalService } from '../accounting/journal.service';
 import { AccountsService } from '../accounting/accounts.service';
 import { TaxCalculatorService } from '../tax/tax.service';
 import type { TaxStatus } from '../tax/tax.service';
+import { assertBranchInTenant, assertCustomerInTenant } from '../common/tenant-fk-guards';
 
 /**
  * Equipment rentals for the courts / sports-facility vertical — paddles,
@@ -47,6 +48,8 @@ export class EquipmentRentalsService {
     rentFeeCentavos?: number; depositCentavos?: number; branchId?: string;
   }) {
     if (!dto.name?.trim()) throw new BadRequestException('Item name is required.');
+    // The item's branch is copied onto every rental of it, so it must be ours.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
     return this.prisma.rentableItem.create({
       data: {
         tenantId,
@@ -104,6 +107,8 @@ export class EquipmentRentalsService {
   async rentOut(tenantId: string, createdById: string | null, dto: RentOutDto) {
     if (!dto.customerName?.trim()) throw new BadRequestException('Customer name is required.');
     if (!dto.itemIds?.length)      throw new BadRequestException('At least one item is required.');
+    // A linked customer must be one of this club's own.
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
 
     const items = await this.prisma.rentableItem.findMany({
       where: { id: { in: dto.itemIds }, tenantId },

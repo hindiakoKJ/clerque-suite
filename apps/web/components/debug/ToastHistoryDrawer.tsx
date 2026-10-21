@@ -18,6 +18,7 @@
 import { useEffect, useState } from 'react';
 import { Bug, X, AlertTriangle, CheckCircle2, Info, AlertCircle } from 'lucide-react';
 import { toast as sonnerToast } from 'sonner';
+import { onScreenCacheClear } from '@/lib/session/shop-state';
 
 interface Entry {
   id:        number;
@@ -39,6 +40,14 @@ function record(level: Entry['level'], msg: unknown) {
   if (buffer.length > 50) buffer.length = 50;
   listeners.forEach((l) => l());
 }
+
+// Emptied at sign-out and when another shop signs in on this tab: the
+// messages name parked tables, customers, amounts and staff, and a
+// client-side sign-out does not reload the buffer away.
+onScreenCacheClear(() => {
+  buffer.length = 0;
+  listeners.forEach((l) => l());
+});
 
 /** Patch sonner so every toast call also lands in our buffer. */
 function patchSonnerOnce() {

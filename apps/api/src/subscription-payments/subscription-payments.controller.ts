@@ -20,13 +20,24 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { type JwtPayload } from '@repo/shared-types';
-import { SubscriptionPaymentsService } from './subscription-payments.service';
+import { SubscriptionPaymentsService, publicPaymentView } from './subscription-payments.service';
+
+/** An http(s) URL that parses; anything else (javascript:, data:, junk) is not. */
+function isWebLink(raw: string): boolean {
+  try {
+    const u = new URL(raw.trim());
+    return u.protocol === 'https:' || u.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
 
 @ApiTags('Subscription Payments')
 @Controller('subscription-payments')
@@ -49,30 +60,26 @@ export class SubscriptionPaymentsController {
   /**
    * Customer looks up their pending payment by reference code.
    * Used by the /pay/<refCode> page during signup + renewal.
+   *
+   * The code is the only key, so guesses are held to 10 a minute per
+   * address on this route (the global limit is 600). The page reads it once
+   * on open and once after sending proof.
    */
+  @Throttle({ short: { ttl: 60_000, limit: 10 } })
   @Get('public/:referenceCode')
   async getByReference(@Param('referenceCode') referenceCode: string) {
     const payment = await this.svc.getByReferenceCode(referenceCode);
     // Strip server-side fields the customer shouldn't see
-    return {
-      referenceCode:  payment.referenceCode,
-      planCode:       payment.planCode,
-      amountPhpCents: payment.amountPhpCents,
-      periodStart:    payment.periodStart,
-      periodEnd:      payment.periodEnd,
-      reason:         payment.reason,
-      status:         payment.status,
-      submittedAt:    payment.submittedAt,
-      expiresAt:      payment.expiresAt,
-      tenantName:     payment.tenant.name,
-    };
+    return publicPaymentView(payment);
   }
 
   /**
    * Customer submits proof of payment (transaction ID + optional screenshot URL).
-   * Public endpoint — referenceCode is the access control (5-char alphabet).
-   * Future hardening: rate-limit by IP.
+   * Public endpoint — referenceCode is the access control (an unguessable
+   * code, see subscription-payments.service.ts). Accepted once per payment.
+   * 5 tries per 10 minutes per address: a real payer sends it once.
    */
+  @Throttle({ short: { ttl: 600_000, limit: 5 } })
   @Post('public/:referenceCode/submit-proof')
   async submitProof(
     @Param('referenceCode') referenceCode: string,
@@ -88,6 +95,11 @@ export class SubscriptionPaymentsController {
     }
     if (!['MAYA', 'BDO', 'MARIBANK', 'GCASH'].includes(body.submittedMethod)) {
       throw new BadRequestException('Unsupported payment method.');
+    }
+    // The Console shows this link to the platform admin as "View receipt
+    // screenshot", so only an ordinary web link may go in (never javascript:).
+    if (body.submittedProofUrl && !isWebLink(body.submittedProofUrl)) {
+      throw new BadRequestException('The screenshot link must start with http:// or https://.');
     }
     const updated = await this.svc.submitProof({ referenceCode, ...body });
     return {

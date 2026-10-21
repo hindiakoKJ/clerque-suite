@@ -404,6 +404,9 @@ export default function PosTerminal() {
       await db.pendingOrders.add({
         clientUuid,
         branchId: activeBranchId,
+        // Whose sale this is: only this shop may later see, send or delete it.
+        tenantId: tenantId || undefined,
+        userId: user?.sub,
         payload: orderPayload,
         receiptSnapshot: receiptBase,
         queuedAt: Date.now(),

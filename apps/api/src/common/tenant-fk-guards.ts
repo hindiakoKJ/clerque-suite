@@ -22,8 +22,20 @@
  * a defensive (non-leaking) message on failure. They pass through `null /
  * undefined` IDs without erroring — DTO branchId is often optional.
  */
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, Logger } from '@nestjs/common';
 import type { PrismaService } from '../prisma/prisma.service';
+
+const logger = new Logger('TenantFkGuard');
+
+/**
+ * A refused id is a shop sending an id that is not its own: a stale screen,
+ * or someone probing. Logged (shop and kind only, never the id's owner or any
+ * personal data) so repeated attempts show up in the logs.
+ */
+function refuse(tenantId: string, kind: string, message: string): never {
+  logger.warn(`Refused a ${kind} id that is not in shop ${tenantId}`);
+  throw new ForbiddenException(message);
+}
 
 /**
  * Assert that the given branchId belongs to the given tenant.
@@ -40,9 +52,7 @@ export async function assertBranchInTenant(
     select: { id: true },
   });
   if (!found) {
-    throw new ForbiddenException(
-      'The provided branchId does not belong to your organization.',
-    );
+    refuse(tenantId, 'branch', 'The provided branchId does not belong to your organization.');
   }
 }
 
@@ -60,9 +70,7 @@ export async function assertVendorInTenant(
     select: { id: true },
   });
   if (!found) {
-    throw new ForbiddenException(
-      'The provided vendorId does not belong to your organization.',
-    );
+    refuse(tenantId, 'vendor', 'The provided vendorId does not belong to your organization.');
   }
 }
 
@@ -80,8 +88,6 @@ export async function assertCustomerInTenant(
     select: { id: true },
   });
   if (!found) {
-    throw new ForbiddenException(
-      'The provided customerId does not belong to your organization.',
-    );
+    refuse(tenantId, 'customer', 'The provided customerId does not belong to your organization.');
   }
 }

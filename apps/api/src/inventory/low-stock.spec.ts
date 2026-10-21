@@ -49,7 +49,12 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
         findMany: jest.fn().mockResolvedValue(opts.ingredients ?? []),
       },
       vendor: { findMany: jest.fn().mockResolvedValue(opts.vendors ?? []) },
-      branch: { findUnique: jest.fn().mockResolvedValue({ name: 'Main Branch' }) },
+      branch: {
+        findUnique: jest.fn().mockResolvedValue({ name: 'Main Branch' }),
+        // The slip and the sheet check the branch is the shop's own first.
+        findFirst:  jest.fn(({ where }: any) => Promise.resolve(
+          where.id === BRANCH && where.tenantId === TENANT ? { id: BRANCH } : null)),
+      },
       /*
         getLowStock reads RAW MATERIALS with their branch stock attached, not
         inventory rows — an ingredient never yet received at this branch has no
@@ -459,5 +464,33 @@ describe('InventoryService — low stock covers ingredients, and leaks nothing',
     // GS V 0 — without it the slip stays attached to the roll
     const tail = Array.from(bytes.slice(-3));
     expect(tail).toEqual([0x1d, 0x56, 0x00]);
+  });
+
+  /*
+    The branch comes from the request (?branchId= or the print body), and its
+    name is printed at the top. Looked up by id alone, another shop's branch id
+    printed that shop's branch name on this shop's slip.
+  */
+  describe('the branch must be this shop\'s', () => {
+    const FOREIGN = 'b-other-shop';
+    const { ForbiddenException } = require('@nestjs/common');
+
+    it('refuses the slip, the print and the sheet for another shop\'s branch', async () => {
+      const { svc, prisma } = build({ ingredients: [beans] });
+      const { InlineEscPosBuilder } = require('../close-and-plan/inline-escpos');
+      await expect(svc.lowStockSlip(TENANT, FOREIGN)).rejects.toThrow(ForbiddenException);
+      await expect(svc.lowStockEscPos(TENANT, FOREIGN, InlineEscPosBuilder)).rejects.toThrow(ForbiddenException);
+      await expect(svc.lowStockExport(TENANT, FOREIGN)).rejects.toThrow(ForbiddenException);
+      // Refused before the branch name is ever read.
+      expect(prisma.branch.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('still prints the shop\'s own branch name', async () => {
+      const { svc } = build({ ingredients: [beans] });
+      const { text } = await svc.lowStockSlip(TENANT, BRANCH);
+      expect(text).toContain('Main Branch');
+      const ws = await sheetOf(await svc.lowStockExport(TENANT, BRANCH));
+      expect(String(ws.getCell(1, 1).value)).toContain('Main Branch');
+    });
   });
 });

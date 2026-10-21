@@ -19,6 +19,12 @@
  * key relative to the storage root. The same key reads back from any
  * driver; switching drivers requires migrating existing files (one-time
  * upload) but does NOT require a database migration.
+ *
+ * On S3, nightly backups and audit archives (keys under `backups/` and
+ * `audit-archive/`, see private-keys.ts) go to BACKUP_S3_BUCKET when it is
+ * set, and to S3_BUCKET otherwise. The photo bucket is made public so
+ * browsers can show product images, and R2 cannot keep one folder of a public
+ * bucket private, so whole-shop files belong in a bucket that is never public.
  */
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -30,6 +36,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Readable } from 'stream';
 import { PrismaService } from '../prisma/prisma.service';
+import { isPrivateKey } from './private-keys';
 
 export type StorageDriver = 'S3' | 'LOCAL' | 'DB';
 
@@ -67,6 +74,8 @@ export class StorageService {
   private readonly driver: StorageDriver;
   private readonly s3: S3Client | null = null;
   private readonly bucket: string | null = null;
+  /** Where backups and audit archives go. Same as `bucket` unless BACKUP_S3_BUCKET is set. */
+  private readonly privateBucket: string | null = null;
   private readonly publicUrlBase: string | null = null;
   private readonly localRoot: string;
 
@@ -95,6 +104,19 @@ export class StorageService {
         forcePathStyle: !!endpoint, // R2 prefers path-style; AWS S3 uses virtual-host
       });
       this.logger.log(`Storage driver: S3 (bucket=${bucket}${endpoint ? `, endpoint=${endpoint}` : ''})`);
+      // Same keys and endpoint, so the API token must cover both buckets.
+      this.privateBucket = this.config.get<string>('BACKUP_S3_BUCKET') || bucket;
+      if (this.privateBucket !== bucket) {
+        this.logger.log(`Backups and audit archives: bucket=${this.privateBucket}`);
+      } else if (this.publicUrlBase) {
+        // A public URL means the photo bucket is public, and on R2 that is the
+        // whole bucket. The backup keys are random so they cannot be guessed,
+        // but whole-shop files should still not sit in a public bucket.
+        this.logger.warn(
+          'Backups and audit archives share the public photo bucket. ' +
+          'Set BACKUP_S3_BUCKET to a separate bucket with public access off.',
+        );
+      }
     } else if (driverOverride === 'DB') {
       this.driver = 'DB';
       this.logger.log('Storage driver: DB (Postgres BYTEA, ProductPhoto table) — set via STORAGE_DRIVER=DB.');
@@ -170,6 +192,14 @@ export class StorageService {
   getDriver(): StorageDriver { return this.driver; }
 
   /**
+   * The S3 bucket a key (or listing prefix) lives in. Backups and audit
+   * archives read and write the backup bucket; everything else the main one.
+   */
+  private bucketFor(storageKey: string): string {
+    return isPrivateKey(storageKey) ? this.privateBucket! : this.bucket!;
+  }
+
+  /**
    * Move a multer-uploaded temp file (`file.path`) to its permanent location
    * under `storageKey`. Removes the temp file on success or failure.
    */
@@ -178,7 +208,7 @@ export class StorageService {
       const body = await fs.promises.readFile(tempPath);
       try {
         await this.s3!.send(new PutObjectCommand({
-          Bucket:      this.bucket!,
+          Bucket:      this.bucketFor(storageKey),
           Key:         storageKey,
           Body:        body,
           ContentType: opts.contentType,
@@ -215,7 +245,7 @@ export class StorageService {
   async putBuffer(buffer: Buffer, storageKey: string, opts: PutOptions = {}): Promise<void> {
     if (this.driver === 'S3') {
       await this.s3!.send(new PutObjectCommand({
-        Bucket:      this.bucket!,
+        Bucket:      this.bucketFor(storageKey),
         Key:         storageKey,
         Body:        buffer,
         ContentType: opts.contentType,
@@ -270,7 +300,7 @@ export class StorageService {
     if (this.driver === 'S3') {
       try {
         const res = await this.s3!.send(new GetObjectCommand({
-          Bucket: this.bucket!,
+          Bucket: this.bucketFor(storageKey),
           Key:    storageKey,
         }));
         if (!res.Body) throw new NotFoundException('File not found in storage.');
@@ -329,7 +359,7 @@ export class StorageService {
   async list(prefix: string): Promise<Array<{ key: string; size: number; lastModified: Date | null }>> {
     if (this.driver === 'S3') {
       const res = await this.s3!.send(new ListObjectsV2Command({
-        Bucket: this.bucket!,
+        Bucket: this.bucketFor(prefix),
         Prefix: prefix,
         MaxKeys: 1000,
       }));
@@ -387,8 +417,8 @@ export class StorageService {
     if (this.driver === 'S3') {
       try {
         // HEAD first so we can return false for not-found
-        await this.s3!.send(new HeadObjectCommand({ Bucket: this.bucket!, Key: storageKey }));
-        await this.s3!.send(new DeleteObjectCommand({ Bucket: this.bucket!, Key: storageKey }));
+        await this.s3!.send(new HeadObjectCommand({ Bucket: this.bucketFor(storageKey), Key: storageKey }));
+        await this.s3!.send(new DeleteObjectCommand({ Bucket: this.bucketFor(storageKey), Key: storageKey }));
         return true;
       } catch (err: any) {
         if (err?.$metadata?.httpStatusCode === 404 || err?.name === 'NotFound') return false;

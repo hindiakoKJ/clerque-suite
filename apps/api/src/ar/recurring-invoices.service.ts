@@ -67,6 +67,10 @@ export class RecurringInvoicesService {
     const vatAmount = dto.lines.reduce((s, l) => s + (l.taxAmount ?? 0), 0);
     const total     = dto.lines.reduce((s, l) => s + l.lineTotal, 0);
 
+    // Same check as update(): the branch must be this shop's, or every
+    // invoice the cron makes from this template would point at another shop.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
+
     const created = await this.prisma.$transaction(async (tx) => {
       const templateNumber = await this.numbering.next(tenantId, 'RECURRING_INVOICE', null, tx);
 

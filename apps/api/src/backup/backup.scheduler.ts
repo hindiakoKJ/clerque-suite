@@ -20,6 +20,8 @@
  * Configuration (env-gated — no-op when unset):
  *   BACKUP_WEBHOOK_URL    — POST endpoint
  *   BACKUP_WEBHOOK_TOKEN  — Bearer token sent in Authorization header
+ *   BACKUP_S3_BUCKET      — optional private bucket for the S3 copy; falls
+ *                           back to S3_BUCKET (see storage/private-keys.ts)
  *
  * If unset, the scheduler logs "no destination configured; skipping" and
  * exits — useful for local dev / staging without leaking data.
@@ -29,6 +31,7 @@ import { Cron } from '@nestjs/schedule';
 import { PH_TIMEZONE } from '@repo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { unguessableArchiveKey } from '../storage/private-keys';
 
 @Injectable()
 export class BackupScheduler {
@@ -113,7 +116,11 @@ export class BackupScheduler {
           // to purge older). Object Lock on the bucket gives immutable
           // versioning — the ransomware-proof shape recommended in the
           // earlier audit.
-          const key = `backups/${phDay}/${t.slug}.json`;
+          // The key carries a random folder: the day is guessable and the
+          // slug is the shop's company code, so `backups/<day>/<slug>.json`
+          // could be fetched by anyone who reached the bucket. StorageService
+          // also sends it to BACKUP_S3_BUCKET when that is set.
+          const key = unguessableArchiveKey('backups', phDay, t.slug);
           try {
             await this.storage.putBuffer(Buffer.from(json), key, {
               contentType: 'application/json',

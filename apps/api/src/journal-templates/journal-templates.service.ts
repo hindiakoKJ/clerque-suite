@@ -11,7 +11,9 @@
  * automatically; users can also click "Run now" for any template.
  */
 
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable, NotFoundException, BadRequestException, ForbiddenException,
+} from '@nestjs/common';
 import { Prisma, JournalTemplateFrequency } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JournalService } from '../accounting/journal.service';
@@ -63,6 +65,22 @@ export class JournalTemplatesService {
     }
   }
 
+  /**
+   * Every account on the template must be this shop's. The lines are stored
+   * as JSON (no database link to check them), and the nightly job posts them
+   * with no one looking — so a foreign id must be stopped on save and again
+   * before each run, in case one was saved before this check existed.
+   */
+  private async assertAccountsInShop(tenantId: string, lines: TemplateLine[]) {
+    const accountIds = [...new Set(lines.map((l) => l.accountId))];
+    const found = await this.prisma.account.count({
+      where: { id: { in: accountIds }, tenantId },
+    });
+    if (found !== accountIds.length) {
+      throw new ForbiddenException('One or more accounts on this template are not in your shop.');
+    }
+  }
+
   async list(tenantId: string) {
     return this.prisma.journalTemplate.findMany({
       where:   { tenantId },
@@ -86,6 +104,7 @@ export class JournalTemplatesService {
   }) {
     if (!dto.name?.trim()) throw new BadRequestException('Name is required.');
     this.validateLines(dto.lines);
+    await this.assertAccountsInShop(tenantId, dto.lines);
 
     const frequency = dto.frequency ?? 'MANUAL';
     const nextRunAt = frequency === 'MANUAL'
@@ -114,7 +133,10 @@ export class JournalTemplatesService {
     nextRunAt:   string | null;
   }>) {
     const existing = await this.findOne(tenantId, id);
-    if (dto.lines) this.validateLines(dto.lines);
+    if (dto.lines) {
+      this.validateLines(dto.lines);
+      await this.assertAccountsInShop(tenantId, dto.lines);
+    }
 
     return this.prisma.journalTemplate.update({
       where: { id },
@@ -145,6 +167,9 @@ export class JournalTemplatesService {
 
     const lines = t.lines as unknown as TemplateLine[];
     this.validateLines(lines);
+    // Re-checked on every run: a template saved before the save-time check
+    // existed may still hold another shop's account. It must not post.
+    await this.assertAccountsInShop(tenantId, lines);
 
     const today = opts.date ? new Date(opts.date) : new Date();
     const isoDate = today.toISOString().slice(0, 10);

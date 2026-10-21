@@ -64,6 +64,31 @@ export interface UpsertModifierIngredientDto {
 
 const INGREDIENT_ROLES = ['ADD', 'SWAP_OUT', 'SWAP_IN'] as const;
 
+/**
+ * The fields an edit may write, and only those.
+ *
+ * The edit bodies are plain interfaces, which the global validation pipe
+ * cannot see, so the whole body used to reach the database: a body tenantId
+ * moved a group into another shop, and a body modifierGroupId moved an
+ * add-on into another shop's group. The parent ids come from the route and
+ * the shop from the sign-in, never from the body. A field the body leaves
+ * out stays untouched, and null still clears, as before.
+ */
+const GROUP_EDITABLE: ReadonlyArray<keyof UpdateModifierGroupDto> = [
+  'name', 'required', 'multiSelect', 'minSelect', 'maxSelect', 'sortOrder', 'isActive', 'categoryId',
+];
+const OPTION_EDITABLE: ReadonlyArray<keyof UpdateModifierOptionDto> = [
+  'name', 'priceAdjustment', 'isDefault', 'sortOrder', 'isActive', 'recipeMultiplier',
+];
+
+function editableOnly<T extends object>(dto: T, fields: ReadonlyArray<keyof T>): Partial<T> {
+  const out: Partial<T> = {};
+  for (const f of fields) {
+    if (dto[f] !== undefined) out[f] = dto[f];
+  }
+  return out;
+}
+
 @Injectable()
 export class ModifiersService {
   constructor(private prisma: PrismaService) {}
@@ -131,7 +156,7 @@ export class ModifiersService {
     // Atomic tenant-scoped update — closes TOCTOU between findGroup and update.
     const result = await this.prisma.modifierGroup.updateMany({
       where: { id: groupId, tenantId },
-      data:  dto,
+      data:  editableOnly(dto, GROUP_EDITABLE),
     });
     if (result.count === 0) throw new NotFoundException('Modifier group not found');
     return this.prisma.modifierGroup.findUnique({
@@ -292,7 +317,7 @@ export class ModifiersService {
     // ModifierOption has no own tenantId — scope through parent group.
     const result = await this.prisma.modifierOption.updateMany({
       where: { id: optionId, modifierGroupId: groupId, group: { tenantId } },
-      data:  dto,
+      data:  editableOnly(dto, OPTION_EDITABLE),
     });
     if (result.count === 0) throw new NotFoundException('Modifier option not found');
     return this.prisma.modifierOption.findUnique({ where: { id: optionId } });

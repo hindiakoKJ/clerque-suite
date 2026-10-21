@@ -205,18 +205,25 @@ export class JobOrdersService {
     if (price < 0)    throw new BadRequestException('unitPrice cannot be negative.');
     if (!dto.description?.trim()) throw new BadRequestException('description is required.');
 
-    if (dto.kind === 'PART' || dto.kind === 'CONSUMABLE') {
-      if (!dto.productId) {
-        throw new BadRequestException(`${dto.kind} lines require productId.`);
-      }
+    if ((dto.kind === 'PART' || dto.kind === 'CONSUMABLE') && !dto.productId) {
+      throw new BadRequestException(`${dto.kind} lines require productId.`);
+    }
+    // Any product or technician a line names must be this shop's, whatever
+    // the line's kind: the job order reads both names back. Only PART and
+    // CONSUMABLE lines were checked for a product and only LABOR lines for a
+    // technician, so another shop's id rode in on the other kinds.
+    if (dto.productId) {
       const product = await this.prisma.product.findFirst({
         where: { id: dto.productId, tenantId }, select: { id: true },
       });
       if (!product) throw new NotFoundException('Product not found.');
     }
-    if (dto.kind === 'LABOR' && dto.technicianId) {
+    if (dto.technicianId) {
+      // A LABOR line's technician must still be working here, as before; on
+      // other kinds the id is only held to the shop.
       const tech = await this.prisma.user.findFirst({
-        where: { id: dto.technicianId, tenantId, isActive: true }, select: { id: true },
+        where: { id: dto.technicianId, tenantId, ...(dto.kind === 'LABOR' ? { isActive: true } : {}) },
+        select: { id: true },
       });
       if (!tech) throw new NotFoundException('Technician not found or inactive.');
     }

@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Coffee, Snowflake, ChefHat, Cake, Store, Monitor, LogOut } from 'lucide-react';
 import { api } from '@/lib/api';
+import { signOut } from '@/lib/session/sign-out';
 import { useAuthStore } from '@/store/auth';
 import { screenLabel } from '@/app/pos/station/[id]/station-screen';
 
@@ -42,7 +43,7 @@ const STATION_ICON: Record<string, React.ElementType> = {
 
 export default function SelectDisplayPage() {
   const router = useRouter();
-  const { user, accessToken, clear } = useAuthStore();
+  const { user, accessToken } = useAuthStore();
 
   const { data, isLoading } = useQuery<LayoutResponse>({
     queryKey: ['floor-layout-display'],
@@ -123,10 +124,7 @@ export default function SelectDisplayPage() {
         <div className="text-center pt-4">
           <button
             onClick={async () => {
-              const refresh = localStorage.getItem('app-auth');
-              if (refresh) { try { await api.post('/auth/logout', { refreshToken: refresh }); } catch {} }
-              clear();
-              document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+              await signOut();
               router.push('/login');
             }}
             className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300"

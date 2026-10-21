@@ -15,6 +15,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { assertPinPolicy } from '../auth/pin-policy';
 import { assertPasswordPolicy } from '../auth/password-policy';
 import { LINKABLE_ROLES } from '../telegram/link-roles';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 
 /** Roles tied to one branch -- the same list as BRANCH_SCOPED_ROLES in common/branch-scope.ts. */
 const ONE_BRANCH_ROLES = new Set([
@@ -139,6 +140,11 @@ export class UsersService {
         'Only the Business Owner can create a Business Owner account.',
       );
     }
+
+    // A picked branch must be one of this shop's. Without this, a branch id
+    // from another shop is stored on the account, and the staff list then
+    // shows that shop's branch name.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     // Check email uniqueness within tenant
     const existing = await this.prisma.user.findFirst({
@@ -292,6 +298,10 @@ export class UsersService {
 
   async update(tenantId: string, id: string, dto: UpdateUserDto, callerRole?: string, callerId?: string) {
     await this.findOne(tenantId, id, callerRole);
+
+    // Same rule as create(): moving someone to a branch only works for this
+    // shop's branches. null (clearing the branch) passes through.
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
 
     // Sprint 19 — friendly duplicate-PIN error before the DB constraint fires.
     // dto.kioskPin === null clears it; a non-null value must be unique within

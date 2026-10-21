@@ -4,6 +4,7 @@ import { Lock, LogOut, Loader2, Calculator } from 'lucide-react';
 import { jwtDecode } from 'jwt-decode';
 import type { JwtPayload } from '@repo/shared-types';
 import { api } from '@/lib/api';
+import { signOut } from '@/lib/session/sign-out';
 import { useAuthStore } from '@/store/auth';
 import { useShiftStore } from '@/store/pos/shift';
 import { useTillLockStore } from '@/store/pos/tillLock';
@@ -24,7 +25,7 @@ import { toast } from 'sonner';
  */
 export function TillLockOverlay() {
   const { locked, lockedByName, unlock } = useTillLockStore();
-  const { user, setTokens, setUser, clear } = useAuthStore();
+  const { user, setTokens, setUser } = useAuthStore();
   const activeShift = useShiftStore((s) => s.activeShift);
 
   const [pin, setPin] = useState('');
@@ -211,8 +212,12 @@ export function TillLockOverlay() {
         <button
           onClick={() => {
             unlock();          // the login page is its own gate
-            clear();
-            window.location.href = '/login';
+            // A handover: the cart and open drawer wait for the relief
+            // cashier. If whoever signs in next is of another shop, sign-in
+            // forgets them (store/auth.ts setUser).
+            void signOut({ keepTill: true }).finally(() => {
+              window.location.href = '/login';
+            });
           }}
           className="mt-6 inline-flex items-center gap-1.5 text-xs text-stone-500 hover:text-stone-300 transition-colors"
         >

@@ -2616,3 +2616,36 @@ On the test shop the ready-to-use Teriyaki Sauce is really past its use-by.
 
 **Not seen on screen:** the station tablet view itself (behind pairing or a login); the use-by
 alerts were proved in specs, not by waiting for the half-hour run.
+
+## Tenant isolation: safety net + gaps (21 Oct, KJ: "go")
+
+Full findings: `E:\AI Projects\Clerque - Tenant isolation check - 2026-10-21.md` (kept out of this public repo).
+No migration, no new dependency.
+- [x] Safety net: request tenant context (AsyncLocalStorage) + Prisma extension that adds the caller's shop
+      to every query on the 108 shop-scoped tables and refuses writes that name another shop; system mode
+      for background jobs and platform-admin work.
+- [x] Find every by-design cross-shop path a shop request takes; run them in system mode.
+- [x] Console "make super admin" matches only platform-admin accounts.
+- [x] Unguessable public codes: laundry claim stubs, subscription payment pages (+ tighter limits).
+- [x] Ids from another shop refused: recipes/categories/units, customers, modifiers, bank recon, journals,
+      recurring bills/invoices, staff/import branches, purchase orders, fuel/projects/trucking/pharmacy/job orders.
+- [x] Receipt AI provider switch: platform admin only.
+- [x] Shared tablet: sign-out clears screen data, cart, parked sales, shift and display pairing; the offline
+      queue belongs to its shop.
+- [x] Backups/archives kept apart from public photos (setup docs, unguessable keys).
+- [x] Gates once (API tsc + jest + build, web tsc + build + specs); local check: every GET route before/after
+      for two shops, plus the till and Inventory flows; push.
+
+Review (21 Oct): done and checked on the local copy.
+- Safety net on: 13 rule tests, 8 checks against the local database (another shop's product cannot be read,
+  listed, changed or created into, in transactions too; system mode and raw SQL untouched).
+- Every parameter-free GET route (205) called as 3 users in 2 shops with the net off and on: 615 calls,
+  0 status changes; only timestamped bodies differ (the same as two runs with it off).
+- Writes with the net on: cash sale, sale on account, label, tag, photo, cost, find, roll call, return check,
+  daily report, shift summary; the books posted (cash 1010/4010, on account 1030/4010), no events left.
+- Browser: sign-out empties cart, parked sales, shift and till lock and ends the server session (old token 401);
+  the next shop's cashier sees only their own shop; another shop's queued offline sale stays queued and unseen.
+- Gates: API tsc, 3818 tests, build; web tsc, 398 of 399 specs (the known buy-list spec), build.
+Left for KJ: old laundry ticket links and old 5-letter payment codes still open (now without names, and
+throttled): expire or backfill them is his call. One existing route errors without filters
+(GET /trucking/reports/ltfrb-monthly, both before and after).

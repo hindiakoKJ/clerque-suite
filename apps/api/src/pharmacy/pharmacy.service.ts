@@ -3,6 +3,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { pharmacistPinAttempts } from '../auth/pin-attempts';
+import { assertCustomerInTenant } from '../common/tenant-fk-guards';
 import type { Prisma } from '@prisma/client';
 
 /**
@@ -74,6 +75,8 @@ export class PharmacyService {
     if (dto.refillsRemaining != null && dto.refillsRemaining < 0) {
       throw new BadRequestException('refillsRemaining cannot be negative.');
     }
+    // The prescription reads the customer's name back, so it must be ours.
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
 
     return this.prisma.prescription.create({
       data: {

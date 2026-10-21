@@ -84,6 +84,23 @@ export class JournalService {
   }
 
   /**
+   * Guard: every account on the entry must be one of this shop's. All shops
+   * share one database, and assertPostingControl below only looks at the
+   * accounts it finds in this shop — an id from another shop was simply not
+   * found and slipped through to the write.
+   */
+  private async assertAccountsInTenant(tenantId: string, lines: LineInput[]) {
+    const accountIds = [...new Set(lines.map((l) => l.accountId).filter(Boolean))];
+    if (accountIds.length === 0) return;
+    const found = await this.prisma.account.count({
+      where: { id: { in: accountIds }, tenantId },
+    });
+    if (found !== accountIds.length) {
+      throw new ForbiddenException('One or more accounts on this entry are not in your shop.');
+    }
+  }
+
+  /**
    * Guard: check that no manually-entered line targets an AP/AR/SYSTEM-only account.
    * Pass source='SYSTEM' to bypass (used by the @Cron event processor).
    * Pass source='AP' / 'AR' to allow their respective sub-ledger accounts.
@@ -130,6 +147,10 @@ export class JournalService {
     source: JournalSource = 'MANUAL',
   ) {
     this.validateLines(dto.lines);
+
+    // 0. Every account must be this shop's — for every source, since the
+    //    lines are written exactly as given.
+    await this.assertAccountsInTenant(tenantId, dto.lines);
 
     // 1. Posting control guard (skip for system/AP/AR sources)
     await this.assertPostingControl(tenantId, dto.lines, source);
@@ -215,6 +236,9 @@ export class JournalService {
       debit:  Number(l.debit),
       credit: Number(l.credit),
     }));
+    // A draft saved before accounts were checked on create could still name
+    // another shop's account: checked again here, before it reaches the books.
+    await this.assertAccountsInTenant(tenantId, lineInputs);
     await this.assertPostingControl(tenantId, lineInputs, 'MANUAL');
     await this.periods.assertDateIsOpen(tenantId, entry.postingDate ?? entry.date);
 

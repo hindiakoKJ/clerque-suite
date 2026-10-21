@@ -75,6 +75,23 @@ function inferDrugClass(isRxRequired: boolean | undefined, isControlledDrug: boo
   return 'OTC';
 }
 
+/**
+ * Every recipe line must name one of this shop's own ingredients.
+ *
+ * The cost lookups read ingredients with the shop's tenantId, so another
+ * shop's id simply came back missing and was written anyway. The recipe then
+ * showed that shop's ingredient with its purchase price and live stock, and
+ * the link blocked that shop's backup restore. `found` is what the
+ * shop-scoped lookup returned for `ids`. The answer is the same for an id
+ * that exists nowhere, so it never says whether another shop has it.
+ */
+function refuseForeignIngredients(ids: string[], found: Array<{ id: string }>): void {
+  const mine = new Set(found.map((r) => r.id));
+  if (ids.some((id) => !mine.has(id))) {
+    throw new ForbiddenException('That ingredient is not in your shop.');
+  }
+}
+
 import { CreateProductDto, CreateVariantDto, CreateBomItemDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { CostSanityService } from '../common/sanity/cost-sanity.service';
@@ -281,6 +298,7 @@ export class ProductsService {
 
   async create(tenantId: string, dto: CreateProductDto, sanity?: SanityContext) {
     const { variants, bomItems, sanityConfirmations: _answered, ...rest } = dto;
+    await this.assertCatalogLinksInTenant(tenantId, rest.categoryId, rest.unitOfMeasureId);
 
     // Sprint 25 — Recipe cap enforcement for Solo tiers. SOLO_LITE caps at 5
     // recipe products; SOLO_STANDARD / PRO are unlimited. Only enforced when
@@ -314,6 +332,7 @@ export class ProductsService {
         where:  { id: { in: rmIds }, tenantId },
         select: { id: true, costPrice: true },
       });
+      refuseForeignIngredients(rmIds, rmRows);
       const costById = new Map(rmRows.map((r) => [r.id, r.costPrice != null ? Number(r.costPrice) : 0]));
       resolvedCostPrice = bomItems.reduce(
         (sum, b) => sum + (costById.get(b.rawMaterialId) ?? 0) * Number(b.quantity),
@@ -375,6 +394,7 @@ export class ProductsService {
   async update(tenantId: string, id: string, dto: UpdateProductDto, callerRole?: string, sanity?: SanityContext) {
     const existing = await this.findOne(tenantId, id);
     const { price, costPrice, sanityConfirmations: _answered, ...rest } = dto;
+    await this.assertCatalogLinksInTenant(tenantId, rest.categoryId, rest.unitOfMeasureId);
 
     // ── SOD Price Wall ────────────────────────────────────────────────────────
     // Defense-in-depth: the controller @Roles() guard is the first line; this
@@ -568,6 +588,18 @@ export class ProductsService {
     }
 
     const saved = await this.prisma.$transaction(async (tx) => {
+      // The ingredients' costs, read with the shop's tenantId. Read before the
+      // old recipe is wiped, so a line naming another shop's ingredient is
+      // refused with the recipe on file left as it was.
+      const rmIds  = items.map((b) => b.rawMaterialId);
+      const rmRows = items.length > 0
+        ? await tx.rawMaterial.findMany({
+            where:  { id: { in: rmIds }, tenantId },
+            select: { id: true, costPrice: true },
+          })
+        : [];
+      refuseForeignIngredients(rmIds, rmRows);
+
       // Wipe existing BOM
       await tx.bomItem.deleteMany({ where: { productId } });
 
@@ -592,11 +624,6 @@ export class ProductsService {
       const inventoryMode = items.length > 0 ? 'RECIPE_BASED' : 'UNIT_BASED';
       let derivedCost: number | null = null;
       if (items.length > 0) {
-        const rmIds  = items.map((b) => b.rawMaterialId);
-        const rmRows = await tx.rawMaterial.findMany({
-          where:  { id: { in: rmIds }, tenantId },
-          select: { id: true, costPrice: true },
-        });
         const costById = new Map(rmRows.map((r) => [r.id, r.costPrice != null ? Number(r.costPrice) : 0]));
         derivedCost = items.reduce(
           (sum, b) => sum + (costById.get(b.rawMaterialId) ?? 0) * Number(b.quantity),
@@ -642,6 +669,16 @@ export class ProductsService {
       where: { id: variantId, productId, product: { tenantId } },
     });
     if (!variant) throw new NotFoundException('Variant not found');
+
+    // A size's recipe is held to the same rule as the product's (saveBom).
+    if (items.length > 0) {
+      const rmIds = items.map((b) => b.rawMaterialId);
+      const mine  = await this.prisma.rawMaterial.findMany({
+        where:  { id: { in: rmIds }, tenantId },
+        select: { id: true },
+      });
+      refuseForeignIngredients(rmIds, mine);
+    }
 
     return this.prisma.$transaction(async (tx) => {
       await tx.variantBomItem.deleteMany({ where: { variantId } });
@@ -1124,5 +1161,30 @@ export class ProductsService {
       this.logger.warn(`[pos] could not look up parked backups for the till: ${err instanceof Error ? err.message : err}`);
     }
     return out;
+  }
+
+  /**
+   * A product's category and unit must be this shop's own.
+   *
+   * Both arrive as ids from the product form and were written as they came,
+   * so another shop's id linked its category or unit here and the product
+   * read that shop's row back. Absent or null passes: neither is required,
+   * and null clears it.
+   */
+  private async assertCatalogLinksInTenant(
+    tenantId: string,
+    categoryId?: string | null,
+    unitOfMeasureId?: string | null,
+  ): Promise<void> {
+    const [category, unit] = await Promise.all([
+      categoryId
+        ? this.prisma.category.findFirst({ where: { id: categoryId, tenantId }, select: { id: true } })
+        : null,
+      unitOfMeasureId
+        ? this.prisma.unitOfMeasure.findFirst({ where: { id: unitOfMeasureId, tenantId }, select: { id: true } })
+        : null,
+    ]);
+    if (categoryId && !category)  throw new ForbiddenException('That category is not in your shop.');
+    if (unitOfMeasureId && !unit) throw new ForbiddenException('That unit is not in your shop.');
   }
 }

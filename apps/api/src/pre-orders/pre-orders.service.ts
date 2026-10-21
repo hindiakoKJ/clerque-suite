@@ -19,6 +19,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, PreOrderStatus } from '@prisma/client';
+import { assertBranchInTenant, assertCustomerInTenant } from '../common/tenant-fk-guards';
 
 export interface PreOrderItemDto {
   productId:        string;
@@ -125,6 +126,10 @@ export class PreOrdersService {
     if (products.length !== productIds.length) {
       throw new BadRequestException('One or more products do not belong to this tenant.');
     }
+    // The branch and customer must be this shop's too: the pre-order reads
+    // the customer's whole record back (TIN, address, phone).
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
 
     const subtotalCents = dto.items.reduce(
       (acc, i) => acc + Math.round(i.quantity * i.unitPriceCents) + (i.modifierAddCents ?? 0),
@@ -186,6 +191,8 @@ export class PreOrdersService {
     if (existing.status === 'PICKED_UP' || existing.status === 'CANCELLED') {
       throw new BadRequestException(`Cannot edit a ${existing.status.toLowerCase()} pre-order.`);
     }
+    // Same rule as create. Null clears the customer and needs no check.
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
 
     // Replace items if provided
     if (dto.items) {

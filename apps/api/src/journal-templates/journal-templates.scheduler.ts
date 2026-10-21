@@ -40,6 +40,8 @@ export class JournalTemplatesScheduler {
             await this.svc.runNow(t.id, tpl.id, tpl.createdById);
             this.logger.log(`Tenant ${t.id}: ran template ${tpl.name} (${tpl.id})`);
           } catch (err) {
+            // Includes a template holding another shop's account: runNow
+            // refuses it before posting, so it is skipped and logged here.
             this.logger.error(`Tenant ${t.id} template ${tpl.id} failed: ${(err as Error).message}`);
           }
         }

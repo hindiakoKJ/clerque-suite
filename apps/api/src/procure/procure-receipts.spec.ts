@@ -1,4 +1,5 @@
 import { ProcureReceiptsService } from './procure-receipts.service';
+import { ProcureReceiptsController } from './procure-receipts.controller';
 
 /**
  * A receipt becomes a request, then stock, then expenses, then a filed photo.
@@ -213,16 +214,24 @@ describe('ProcureReceiptsService', () => {
       expect(instruction).toMatch(/overlap/i);
     });
 
-    it('lets an owner read one receipt with the other provider, to compare', async () => {
+    it('lets the platform admin read one receipt with the other provider, to compare', async () => {
       const { svc, ai } = build({ aiText: READING });
-      await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=', provider: 'anthropic' }, 'BUSINESS_OWNER');
+      await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=', provider: 'anthropic' }, true);
       expect(ai.call.mock.calls[0][0].provider).toBe('anthropic');
     });
 
-    it('ignores the same request from anyone else — it decides who gets billed', async () => {
+    it('ignores the same request from a shop owner — any free sign-up is one, and it decides who gets billed', async () => {
       const { svc, ai } = build({ aiText: READING });
-      await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=', provider: 'anthropic' }, 'BRANCH_MANAGER');
+      // The controller passes user.isSuperAdmin; a shop owner's token has false.
+      await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=', provider: 'anthropic' }, false);
       // Ignored, not refused: the read still happens, on the house provider.
+      expect(ai.call.mock.calls).toHaveLength(1);
+      expect(ai.call.mock.calls[0][0].provider).toBeUndefined();
+    });
+
+    it('ignores it when nobody says who is asking (default is not the platform admin)', async () => {
+      const { svc, ai } = build({ aiText: READING });
+      await svc.parse(TENANT, USER, { imageBase64: 'aGVsbG8=', provider: 'anthropic' });
       expect(ai.call.mock.calls[0][0].provider).toBeUndefined();
     });
 
@@ -984,4 +993,29 @@ describe('the shop remembers what it tagged', () => {
   });
 });
 
+});
+
+/**
+ * AI-1: the route hands parse() the token's isSuperAdmin, not the role, so a
+ * shop owner's "provider" never reaches the AI call.
+ */
+describe('ProcureReceiptsController.parse — who may pick the reader', () => {
+  function build() {
+    const receipts = { parse: jest.fn(async () => ({ lines: [] })) };
+    const ctrl = new ProcureReceiptsController(receipts as any, {} as any, {} as any);
+    return { ctrl, receipts };
+  }
+  const dto = { imageBase64: 'aGVsbG8=', provider: 'anthropic' } as any;
+
+  it('a shop owner is passed as not the platform admin', async () => {
+    const { ctrl, receipts } = build();
+    await ctrl.parse({ sub: 'u1', tenantId: 't1', role: 'BUSINESS_OWNER', isSuperAdmin: false } as any, dto, {} as any);
+    expect(receipts.parse).toHaveBeenCalledWith('t1', 'u1', dto, false);
+  });
+
+  it('the platform admin is passed as the platform admin', async () => {
+    const { ctrl, receipts } = build();
+    await ctrl.parse({ sub: 'sa', tenantId: 't-home', role: 'SUPER_ADMIN', isSuperAdmin: true } as any, dto, {} as any);
+    expect(receipts.parse).toHaveBeenCalledWith('t-home', 'sa', dto, true);
+  });
 });

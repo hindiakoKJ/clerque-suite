@@ -4,6 +4,7 @@ import type { JwtPayload, AppCode, AccessLevel } from '@repo/shared-types';
 import { levelValue } from '@repo/shared-types';
 import { useCartStore } from './pos/cart';
 import { setDisplayCurrency } from '@/lib/utils';
+import { adoptShopOnLoad, adoptShopOnSignIn } from '@/lib/session/shop-state';
 
 interface AuthState {
   accessToken: string | null;
@@ -27,6 +28,11 @@ export const useAuthStore = create<AuthState>()(
 
       setTokens: (accessToken, refreshToken) => set({ accessToken, refreshToken }),
       setUser: (user) => {
+        // Every sign-in comes through here (password, PIN, a cashier switch at
+        // the locked till). If the till on this device is another shop's -- a
+        // shared tablet, or a handover to someone of a different shop -- it
+        // is forgotten before this user sees a single screen of it.
+        adoptShopOnSignIn(user.tenantId, get().user?.tenantId);
         set({ user });
         // Push tenant tax classification into the POS cart store so all VAT/discount
         // logic at checkout uses the correct BIR tax engine without extra API calls.
@@ -65,6 +71,9 @@ export const useAuthStore = create<AuthState>()(
       onRehydrateStorage: () => (state) => {
         setDisplayCurrency(state?.user?.currency ?? 'PHP');
         useCartStore.getState().setTenantFlags(state?.user?.taxStatus ?? 'UNREGISTERED');
+        // Note which shop this device's till belongs to, so a later cashier
+        // switch or handover can tell the same shop from another.
+        if (state?.accessToken) adoptShopOnLoad(state.user?.tenantId);
       },
     },
   ),

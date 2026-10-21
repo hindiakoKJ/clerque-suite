@@ -13,6 +13,7 @@ import { AccountingPeriodsService } from '../accounting-periods/accounting-perio
 import { SubRecipesService } from '../sub-recipes/sub-recipes.service';
 import { mapLoyverseItems, looksLikeLoyverse } from './loyverse.mapper';
 import { isRecipeBusinessType } from '@repo/shared-types';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 
 export interface ImportResult {
   imported: number;
@@ -1037,6 +1038,10 @@ export class ImportService {
       variantsExpanded: number;
     }
   > {
+    // The branch comes from the request. Stock rows must never be filed under
+    // another shop's branch, so refuse before anything is written.
+    await assertBranchInTenant(this.prisma, tenantId, branchId);
+
     const rows = await this.parseFile(file);
 
     let mapped;
@@ -1081,6 +1086,9 @@ export class ImportService {
     tenantId: string,
     branchId: string,
   ): Promise<ImportResult> {
+    // Same rule as importLoyverse(): the branch from the request must be one
+    // of this shop's.
+    await assertBranchInTenant(this.prisma, tenantId, branchId);
     const rows = await this.parseFile(file);
     return this.importInventoryFromRows(rows, tenantId, branchId);
   }
@@ -1790,6 +1798,10 @@ export class ImportService {
     tenantId: string,
     branchId: string,
   ): Promise<Record<string, ImportResult & { notIncluded: boolean }>> {
+    // Checked up front, not inside the Inventory step: that step's error would
+    // be caught below and reported as one bad sheet while the rest imported.
+    await assertBranchInTenant(this.prisma, tenantId, branchId);
+
     const sheets = await this.parseAllSheets(file);
     const pick = (...names: string[]): string[][] | null => {
       for (const n of names) {

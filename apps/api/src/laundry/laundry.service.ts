@@ -7,6 +7,8 @@ import {
   LaundryPromoKind, LaundryAddOnKind,
 } from '@prisma/client';
 import { PH_TIMEZONE } from '@repo/shared-types';
+import { assertCustomerInTenant } from '../common/tenant-fk-guards';
+import { newPublicStubToken } from './public-stub-token';
 
 // ─── DTOs ──────────────────────────────────────────────────────────────────────
 
@@ -105,6 +107,10 @@ export class LaundryService {
   async createOrder(tenantId: string, userId: string, dto: CreateLaundryOrderDto) {
     await this.assertLaundryTenant(tenantId);
     const { total } = this.computeTotal(dto);
+    // The ticket shows its customer's name, phone and address back, and the
+    // sale made at pay time copies the id; another shop's customer must not
+    // get in that way.
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
 
     return this.prisma.$transaction(async (tx) => {
       // Validate branch
@@ -565,6 +571,17 @@ export class LaundryService {
     if (order.status === 'CLAIMED') throw new BadRequestException('Already claimed.');
     if (order.status === 'CANCELLED') throw new BadRequestException('Cannot claim a cancelled order.');
 
+    // The ticket shows the linked sale's number and total back, and the link
+    // is unique, so another shop's sale id would leak its amount and block
+    // that shop from linking its own sale. Only this shop's sales may link.
+    if (posOrderId) {
+      const sale = await this.prisma.order.findFirst({
+        where:  { id: posOrderId, tenantId },
+        select: { id: true },
+      });
+      if (!sale) throw new ForbiddenException('That sale is not in your shop.');
+    }
+
     // Atomic claim + loyalty bump in one transaction. We use a status-conditional
     // updateMany so a concurrent claim for the same order can't double-credit
     // the customer's loyalty count.
@@ -607,9 +624,12 @@ export class LaundryService {
   /**
    * Public claim-stub lookup — UNAUTHENTICATED endpoint. Customer scans the
    * QR on their paper ticket (or opens the SMS link) and sees their order
-   * status without logging in. Token is unguessable (claimNumber + 4 random
-   * alphanums) so iterating sequential claim numbers won't surface other
-   * customers' orders.
+   * status without logging in. New tokens are 144 random bits
+   * (public-stub-token.ts). Tickets made before that still carry the old
+   * claimNumber + 4 letters token, which is far weaker; they keep working
+   * because they were handed to customers already (changing them would break
+   * those links), but without the customer's name, and the tight per-IP
+   * limit on the route (public-stub.controller.ts) slows guessing them.
    *
    * Returns minimal fields: claim number, status, promised time, total,
    * loyalty progress. Never returns service-line detail or customer PII.
@@ -633,6 +653,13 @@ export class LaundryService {
       },
     });
     if (!order) throw new NotFoundException('Stub not found or expired.');
+    // An old ticket's link is its claim number plus 4 letters, which can be
+    // found by guessing. Such a link still shows the status, total and
+    // loyalty, but not the customer's name: a name is personal data, and the
+    // customer already knows theirs.
+    if (order.customer && token.startsWith(`${order.claimNumber}-`)) {
+      return { ...order, customer: { loyaltyVisits: order.customer.loyaltyVisits } };
+    }
     return order;
   }
 
@@ -867,6 +894,8 @@ export class LaundryService {
     if (!dto.lines.length && !dto.productLines?.length) {
       throw new BadRequestException('At least one service line or product is required.');
     }
+    // Same rule as createOrder: the customer must be one of this shop's.
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
 
     return this.prisma.$transaction(async (tx) => {
       // Branch validation
@@ -1112,14 +1141,10 @@ export class LaundryService {
       // Generate claim number (reuse existing helper).
       const claimNumber = await this.nextClaimNumber(tx, tenantId);
 
-      // Public stub token — short random suffix appended to the claim number
-      // so the customer-facing /stub/<token> page is unguessable. Format:
-      // {claimNumber}-{4 random alphanum}. Stored on the order; never reuses.
-      const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/1/O/0 — easier to read
-      const suffix = Array.from({ length: 4 }, () =>
-        ALPHA[Math.floor(Math.random() * ALPHA.length)],
-      ).join('');
-      const publicStubToken = `${claimNumber}-${suffix}`;
+      // Public stub token — the whole secret of the customer-facing
+      // /stub/<token> page, so it is 144 random bits and owes nothing to the
+      // claim number (which every laundry shop numbers the same way).
+      const publicStubToken = newPublicStubToken();
 
       const order = await tx.laundryOrder.create({
         data: {

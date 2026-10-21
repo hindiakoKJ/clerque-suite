@@ -13,7 +13,9 @@
  * Until LLM-assisted auto-match is added, matching is manual.
  */
 
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable, NotFoundException, BadRequestException, ForbiddenException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { bankAccountWhere } from '../accounting/bank-accounts';
 
@@ -148,6 +150,38 @@ export class BankReconciliationService {
   ) {
     if (!args.accountId) throw new BadRequestException('accountId is required.');
 
+    // Every id in the body comes from the browser, so each one must be this
+    // shop's before anything is written. One database holds every shop.
+    const account = await this.prisma.account.findFirst({
+      where:  { id: args.accountId, tenantId },
+      select: { id: true },
+    });
+    if (!account) throw new ForbiddenException('That account is not in your shop.');
+
+    // Journal lines carry no tenantId of their own — they belong to the shop
+    // that owns their journal entry.
+    const journalLineIds = [
+      ...new Set(args.items.map((i) => i.journalLineId).filter((x): x is string => !!x)),
+    ];
+    if (journalLineIds.length > 0) {
+      const ownLines = await this.prisma.journalLine.count({
+        where: { id: { in: journalLineIds }, journalEntry: { tenantId } },
+      });
+      if (ownLines !== journalLineIds.length) {
+        throw new ForbiddenException('One or more journal lines are not in your shop.');
+      }
+    }
+
+    // Saving over an existing reconciliation: it must be this shop's. Same
+    // answer for "someone else's" as for "no such id", so nothing leaks.
+    if (args.id) {
+      const existing = await this.prisma.bankReconciliation.findFirst({
+        where:  { id: args.id, tenantId },
+        select: { id: true },
+      });
+      if (!existing) throw new NotFoundException('Reconciliation not found.');
+    }
+
     const matchedAmount = args.items
       .filter((i) => i.isMatched && i.statementAmount != null)
       .reduce((s, i) => s + Math.abs(Number(i.statementAmount)), 0);
@@ -155,7 +189,9 @@ export class BankReconciliationService {
     return this.prisma.$transaction(async (tx) => {
       const recon = args.id
         ? await tx.bankReconciliation.update({
-            where: { id: args.id },
+            // tenantId in the write too, so the save itself can only ever
+            // touch this shop's row, whatever happens between check and write.
+            where: { id: args.id, tenantId },
             data: {
               periodStart:   new Date(args.periodStart),
               periodEnd:     new Date(args.periodEnd),

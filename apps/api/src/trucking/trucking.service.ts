@@ -1,8 +1,9 @@
 import {
-  Injectable, BadRequestException, NotFoundException, ConflictException,
+  Injectable, BadRequestException, NotFoundException, ConflictException, ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NumberingService } from '../numbering/numbering.service';
+import { assertBranchInTenant, assertCustomerInTenant } from '../common/tenant-fk-guards';
 import type { Prisma, TripStatus, FleetAssetKind, PMScheduleType } from '@prisma/client';
 
 /**
@@ -42,6 +43,7 @@ export class TruckingService {
     if (existing) {
       throw new ConflictException(`Plate ${dto.plateNumber} already exists for this tenant.`);
     }
+    await this.assertAssetLinksInTenant(tenantId, dto);
 
     return this.prisma.fleetAsset.create({
       data: {
@@ -89,6 +91,7 @@ export class TruckingService {
   }
 
   async updateAsset(tenantId: string, id: string, dto: Partial<CreateFleetAssetDto> & { isActive?: boolean }) {
+    await this.assertAssetLinksInTenant(tenantId, dto);
     const result = await this.prisma.fleetAsset.updateMany({
       where: { id, tenantId },
       data:  this.cleanUndefined({
@@ -184,6 +187,8 @@ export class TruckingService {
       });
       if (!helper) throw new NotFoundException('Helper not found.');
     }
+    // The trip reads the customer's name back, so it must be ours too.
+    await assertCustomerInTenant(this.prisma, tenantId, dto.customerId);
 
     const cashAdvance = Number(dto.cashAdvance ?? 0);
 
@@ -435,6 +440,24 @@ export class TruckingService {
   }
 
   // ─── helpers ──────────────────────────────────────────────────────────────
+
+  /**
+   * An asset's branch and primary driver must be this shop's own: the asset
+   * reads both names back. Absent or null passes (null clears the link).
+   */
+  private async assertAssetLinksInTenant(
+    tenantId: string,
+    dto: { branchId?: string | null; primaryDriverId?: string | null },
+  ): Promise<void> {
+    await assertBranchInTenant(this.prisma, tenantId, dto.branchId);
+    if (dto.primaryDriverId) {
+      const driver = await this.prisma.user.findFirst({
+        where:  { id: dto.primaryDriverId, tenantId },
+        select: { id: true },
+      });
+      if (!driver) throw new ForbiddenException('That driver is not in your shop.');
+    }
+  }
 
   private cleanUndefined<T extends object>(obj: T): Partial<T> {
     const out: Record<string, unknown> = {};

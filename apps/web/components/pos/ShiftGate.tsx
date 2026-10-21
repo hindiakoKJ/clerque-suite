@@ -5,6 +5,7 @@ import { useShiftStore } from '@/store/pos/shift';
 import { fetchActiveShift, openShift, getShiftSummary } from '@/lib/pos/shifts';
 import { OpenShiftModal } from './OpenShiftModal';
 import { db } from '@/lib/pos/db';
+import { signOut } from '@/lib/session/sign-out';
 import { useFloorLayout } from '@/hooks/useFloorLayout';
 
 /** Roles that supervise the POS but do not operate the register. */
@@ -85,7 +86,21 @@ export function ShiftGate({ children }: ShiftGateProps) {
           }
           // If no shift found, fall through to show OpenShiftModal
         }
-      } catch {
+      } catch (err) {
+        // The API answered "not found" for the saved shift. Shifts are looked
+        // up inside the signed-in shop, so it is another shop's (a shared
+        // tablet) or gone. Keeping it would show that shop's drawer here and
+        // stamp its id on this shop's sales: drop it and look for this
+        // cashier's own open shift instead. Only a network failure keeps it.
+        if (activeShift && (err as { response?: { status?: number } })?.response?.status === 404) {
+          useShiftStore.getState().clearShift();
+          try { await db.activeShift.clear(); } catch { /* offline copy only */ }
+          try {
+            const own = await fetchActiveShift(user!.branchId!);
+            if (own) setActiveShift(own);
+          } catch { /* no shift found: the gate asks to open one */ }
+          return;
+        }
         // Offline or network error — try Dexie cache
         if (!activeShift) {
           try {
@@ -182,9 +197,9 @@ export function ShiftGate({ children }: ShiftGateProps) {
           </p>
           <button
             onClick={() => {
-              useAuthStore.getState().clear();
-              document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-              window.location.href = '/login';
+              void signOut().finally(() => {
+                window.location.href = '/login';
+              });
             }}
             className="mt-4 inline-flex min-h-[2.5rem] items-center rounded-lg border border-border px-3 text-sm transition-colors hover:bg-muted"
           >

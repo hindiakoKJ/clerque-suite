@@ -25,7 +25,13 @@ describe('ProductsService.saveBom — supplies stay out of recipes', () => {
         count:     jest.fn().mockResolvedValue(0),
         update:    jest.fn(),
       },
-      rawMaterial: { findMany: jest.fn().mockResolvedValue(offenders) },
+      // The category check gets the offenders; the cost lookup finds every
+      // line as one of this shop's own ingredients.
+      rawMaterial: {
+        findMany: jest.fn(({ where }: any) => Promise.resolve(
+          where.category !== undefined ? offenders : where.id.in.map((id: string) => ({ id, costPrice: 1 })),
+        )),
+      },
       bomItem:     { deleteMany: jest.fn(), createMany: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
       tenant:      { findUnique: jest.fn().mockResolvedValue({ planCode: 'CLERQUE' }) },
       $transaction: jest.fn((fn: any) => (typeof fn === 'function' ? fn(prisma) : Promise.all(fn))),

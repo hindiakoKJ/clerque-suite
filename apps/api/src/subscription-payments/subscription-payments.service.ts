@@ -23,13 +23,68 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { randomInt } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { planCapsFor, planLabel, type PlanCode } from '@repo/shared-types';
 
 const REFERENCE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No 0/O/1/I to avoid confusion
-const REFERENCE_CODE_LENGTH = 5;
+/*
+  The reference code is the whole key to the public /pay/<code> page: whoever
+  holds it can read the payment and send its one proof. It used to be 5
+  Math.random letters (about 33 million per prefix), which a patient script
+  could find. Now 16 letters from the OS random source, 5 bits each: 80 bits,
+  about 1.2 x 10^24 codes. Even a million addresses at the route's 10 tries a
+  minute, against ten thousand open codes, would need billions of days.
+  It stays in readable groups of four because the payer also types it into
+  their transfer remarks.
+*/
+const REFERENCE_CODE_GROUPS = 4;
+const REFERENCE_CODE_GROUP_LENGTH = 4;
 const PROOF_TTL_DAYS = 30;
+
+const PROOF_ALREADY_SENT =
+  'Proof for this payment was already sent and is waiting for review. ' +
+  'If it needs correcting, contact support.';
+
+/** Statuses whose /pay page greets the payer by the shop's name. */
+const OPEN_STATUSES = new Set(['AWAITING_PROOF', 'PROOF_SUBMITTED']);
+
+/** The random part of a reference code, e.g. "7Z2K-M4PQ-X9TB-3HNC". */
+export function randomReferenceSuffix(): string {
+  const group = () => Array.from(
+    { length: REFERENCE_CODE_GROUP_LENGTH },
+    // randomInt draws evenly, so no letter is likelier than another.
+    () => REFERENCE_CODE_ALPHABET[randomInt(REFERENCE_CODE_ALPHABET.length)],
+  ).join('');
+  return Array.from({ length: REFERENCE_CODE_GROUPS }, group).join('-');
+}
+
+/**
+ * What the public /pay/<code> page may see of a payment.
+ *
+ * The page names the shop only while the payment is still open ("Hi <shop>,
+ * send ..."); a confirmed, rejected or expired payment shows no name, so it
+ * is not sent for those.
+ */
+export function publicPaymentView(payment: {
+  referenceCode: string; planCode: string; amountPhpCents: number;
+  periodStart: Date; periodEnd: Date; reason: string; status: string;
+  submittedAt: Date | null; expiresAt: Date; tenant: { name: string };
+}) {
+  return {
+    referenceCode:  payment.referenceCode,
+    planCode:       payment.planCode,
+    amountPhpCents: payment.amountPhpCents,
+    periodStart:    payment.periodStart,
+    periodEnd:      payment.periodEnd,
+    reason:         payment.reason,
+    status:         payment.status,
+    submittedAt:    payment.submittedAt,
+    expiresAt:      payment.expiresAt,
+    ...(OPEN_STATUSES.has(payment.status) ? { tenantName: payment.tenant.name } : {}),
+  };
+}
 
 export type CreatePendingPaymentInput = {
   tenantId:  string;
@@ -108,8 +163,8 @@ export class SubscriptionPaymentsService {
   // ─── Customer-facing ────────────────────────────────────────────────────
 
   /**
-   * Create a pending payment for a new signup or renewal. Generates a
-   * unique 5-char reference code the customer puts in their transfer remarks.
+   * Create a pending payment for a new signup or renewal. Generates an
+   * unguessable reference code the customer puts in their transfer remarks.
    * Idempotent on (tenantId, periodStart, reason) so re-running doesn't
    * create duplicates.
    */
@@ -207,6 +262,11 @@ export class SubscriptionPaymentsService {
   /**
    * Customer submits proof of payment. Moves status to PROOF_SUBMITTED.
    * Owner now needs to verify in /admin/payments-pending.
+   *
+   * Only once. A second submission used to overwrite the first, so anyone
+   * who found the code could replace a shop's real proof with their own
+   * transaction id and link. The first proof now stands; if it is wrong, the
+   * platform admin rejects it.
    */
   async submitProof(input: SubmitProofInput) {
     const payment = await this.prisma.pendingPayment.findUnique({
@@ -218,23 +278,33 @@ export class SubscriptionPaymentsService {
     if (payment.status === 'CONFIRMED') {
       throw new ConflictException('This payment has already been confirmed.');
     }
+    if (payment.status === 'PROOF_SUBMITTED') {
+      throw new ConflictException(PROOF_ALREADY_SENT);
+    }
     if (payment.status === 'REJECTED' || payment.status === 'EXPIRED') {
       throw new ConflictException(
         `This payment cannot accept proof — status is ${payment.status}. Contact support.`,
       );
     }
 
-    return this.prisma.pendingPayment.update({
-      where: { id: payment.id },
-      data: {
-        status:             'PROOF_SUBMITTED',
-        submittedAt:        new Date(),
-        submittedRefId:     input.submittedRefId,
-        submittedNotes:     input.submittedNotes,
-        submittedMethod:    input.submittedMethod,
-        submittedProofUrl:  input.submittedProofUrl,
-      },
+    const data = {
+      status:             'PROOF_SUBMITTED' as const,
+      submittedAt:        new Date(),
+      submittedRefId:     input.submittedRefId,
+      submittedNotes:     input.submittedNotes,
+      submittedMethod:    input.submittedMethod,
+      submittedProofUrl:  input.submittedProofUrl,
+    };
+    // Conditional on AWAITING_PROOF, so two submissions sent at the same
+    // moment cannot both land: the second finds nothing to change.
+    const flipped = await this.prisma.pendingPayment.updateMany({
+      where: { id: payment.id, status: 'AWAITING_PROOF' },
+      data,
     });
+    if (flipped.count === 0) {
+      throw new ConflictException(PROOF_ALREADY_SENT);
+    }
+    return { ...payment, ...data };
   }
 
   // ─── Owner-facing (admin) ───────────────────────────────────────────────
@@ -538,9 +608,10 @@ export class SubscriptionPaymentsService {
   // ─── Helpers ────────────────────────────────────────────────────────────
 
   /**
-   * Generates a 5-char human-readable reference code. Examples:
-   *   SIGNUP-7Z2K1, RENEW-9XPQ3, UPGRADE-4M5N2
-   * Retries on (very unlikely) collision.
+   * Generates an unguessable reference code (see REFERENCE_CODE_GROUPS).
+   * Examples:
+   *   SIGNUP-7Z2K-M4PQ-X9TB-3HNC, RENEW-9XPQ-3A7D-KMNE-2WRT
+   * Retries on (practically impossible) collision.
    */
   private async generateUniqueReferenceCode(
     reason: 'NEW_SIGNUP' | 'MONTHLY_RENEWAL' | 'PLAN_UPGRADE',
@@ -550,11 +621,7 @@ export class SubscriptionPaymentsService {
       reason === 'MONTHLY_RENEWAL' ? 'RENEW' : 'UPGRADE';
 
     for (let attempt = 0; attempt < 10; attempt++) {
-      const suffix = Array.from(
-        { length: REFERENCE_CODE_LENGTH },
-        () => REFERENCE_CODE_ALPHABET[Math.floor(Math.random() * REFERENCE_CODE_ALPHABET.length)],
-      ).join('');
-      const code = `${prefix}-${suffix}`;
+      const code = `${prefix}-${randomReferenceSuffix()}`;
       const existing = await this.prisma.pendingPayment.findUnique({
         where: { referenceCode: code },
       });

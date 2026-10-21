@@ -111,14 +111,17 @@ export class ProcureReceiptsService {
 
   // ── reading ───────────────────────────────────────────────────────────────
 
-  async parse(tenantId: string, userId: string, dto: ParseReceiptDto, viewerRole?: string | null) {
+  async parse(tenantId: string, userId: string, dto: ParseReceiptDto, isPlatformAdmin = false) {
     /*
-      Only an owner may name the provider. It decides what the read costs and
-      which company sees the photo, so it is not a knob for whoever happens to
-      be holding the phone. Anyone else asking is ignored rather than refused
-      -- the read still happens, on the deployment's own provider.
+      Only the platform admin may name the provider, to put one photo through
+      both readers and compare. It decides who is billed for the read and
+      which company sees the photo; a shop owner (any free sign-up is one)
+      could otherwise move every read onto the paid Anthropic account and send
+      photos to a company the shops were never told about. Anyone else asking
+      is ignored rather than refused -- the read still happens, on the
+      deployment's own provider.
     */
-    const provider = dto.provider && (viewerRole === 'BUSINESS_OWNER' || viewerRole === 'SUPER_ADMIN')
+    const provider = dto.provider && isPlatformAdmin === true
       ? dto.provider
       : undefined;
 

@@ -20,6 +20,7 @@ import { copyShopSetup } from './copy-setup';
 import { AccountsService } from '../accounting/accounts.service';
 import { MailService } from '../mail/mail.service';
 import { MAX_FAILED_ATTEMPTS, lockoutClearedRow, recentFailedLogins } from '../auth/lockout';
+import { newPublicStubToken } from '../laundry/public-stub-token';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1426,13 +1427,11 @@ export class AdminService {
     const STAGES: Array<'RECEIVED' | 'WASHING' | 'DRYING' | 'FOLDING' | 'READY_FOR_PICKUP'> = [
       'RECEIVED', 'WASHING', 'DRYING', 'FOLDING', 'READY_FOR_PICKUP',
     ];
-    const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let seq = 1;
     for (let i = 0; i < STAGES.length; i++) {
       const customer = customers[i % customers.length];
       const isDelivery = i % 3 === 0; // every third order is delivery
       const claimNumber = `CLA-${year}-${String(seq).padStart(6, '0')}`;
-      const suffix = Array.from({ length: 4 }, () => ALPHA[Math.floor(Math.random() * ALPHA.length)]).join('');
       seq += 1;
       await this.prisma.laundryOrder.create({
         data: {
@@ -1440,7 +1439,7 @@ export class AdminService {
           branchId,
           customerId:      customer.id,
           claimNumber,
-          publicStubToken: `${claimNumber}-${suffix}`,
+          publicStubToken: newPublicStubToken(),   // unguessable, like a real ticket's link
           status:          STAGES[i] as any,
           totalAmount:     220 + i * 50,
           intakeBy:        'demo-seed',
@@ -1763,9 +1762,11 @@ export class AdminService {
 
   // ─── Super Admin bootstrap ───────────────────────────────────────────────
   /**
-   * Create or upgrade a real super-admin account (no tenant scope, full
-   * platform access). Idempotent — re-running with the same email finds
-   * the existing user and ensures isSuperAdmin + isActive are correct.
+   * Create a real super-admin account (no tenant scope, full platform
+   * access). Idempotent — re-running with the same email finds the existing
+   * SUPER_ADMIN row and makes sure it is active. Refuses, changing nothing,
+   * when any shop account already has the email: a shop account is never
+   * promoted.
    *
    * Use this to provision YOUR personal super-admin account (the human
    * running Clerque platform-side). Different from demo / test super
@@ -1797,9 +1798,32 @@ export class AdminService {
       );
     }
 
-    const existing = await this.prisma.user.findFirst({ where: { email } });
+    /*
+      Shop staff emails are unique only within a shop, and a shop owner picks
+      the staff member's password. Matching "any user with this email" used to
+      find a shop's staff row and promote it, handing that shop's owner the
+      whole platform. So a shop account with this email anywhere stops the
+      bootstrap outright, before anything is written, and only a row that is
+      already SUPER_ADMIN is ever re-used.
+    */
+    const shopAccount = await this.prisma.user.findFirst({
+      where:  { email: { equals: email, mode: 'insensitive' }, role: { not: 'SUPER_ADMIN' } },
+      select: { id: true },
+    });
+    if (shopAccount) {
+      throw new ConflictException(
+        'A shop account already uses this email, so it cannot be the platform admin. ' +
+        'Use an email that no shop has. A shop account is never promoted.',
+      );
+    }
+
+    const existing = await this.prisma.user.findFirst({
+      where:   { email: { equals: email, mode: 'insensitive' }, role: 'SUPER_ADMIN' },
+      orderBy: { createdAt: 'asc' },
+    });
     if (existing) {
       // Idempotent: ensure flags are right, never rotate password silently.
+      // The row is already SUPER_ADMIN, so only isActive can change here.
       const updated = await this.prisma.user.update({
         where: { id: existing.id },
         data: {
@@ -1818,7 +1842,7 @@ export class AdminService {
         userId:            updated.id,
         email:             updated.email,
         generatedPassword: null,  // never rotate existing passwords
-        message:           `Super admin ${email} already exists — promoted to SUPER_ADMIN role + activated.`,
+        message:           `Super admin ${email} already exists — confirmed active.`,
       };
     }
 

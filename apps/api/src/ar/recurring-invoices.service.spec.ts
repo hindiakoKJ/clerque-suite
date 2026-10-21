@@ -5,16 +5,28 @@
  *   2. pause  — ACTIVE → PAUSED
  *   3. resume — PAUSED → ACTIVE; advances nextRunAt forward past now
  *   4. cancel — non-terminal → CANCELLED
+ *   5. create — branchId must be the shop's own (BOOKS-3)
  */
+import { ForbiddenException } from '@nestjs/common';
 import { RecurringInvoicesService } from './recurring-invoices.service';
 
 const TENANT = 'tenant-1';
 const USER   = 'user-1';
 
+// Branches of two shops, for the branchId check.
+const BRANCHES = [
+  { id: 'branch-own',     tenantId: TENANT },
+  { id: 'branch-foreign', tenantId: 'tenant-2' },
+];
+
 function makePrisma() {
   return {
     customer: { findFirst: jest.fn() },
     account:  { count:     jest.fn() },
+    branch:   {
+      findFirst: jest.fn(async ({ where }: any) =>
+        BRANCHES.find((b) => b.id === where.id && b.tenantId === where.tenantId) ?? null),
+    },
     recurringInvoiceTemplate: {
       findFirst:  jest.fn(),
       findUnique: jest.fn(),
@@ -76,6 +88,35 @@ describe('RecurringInvoicesService', () => {
       startDate: '2026-06-15', endDate: '2026-06-01',
       lines: [{ accountId: 'acc-rev', unitPrice: 100, lineTotal: 100 }],
     })).rejects.toThrow(/endDate must be after startDate/);
+  });
+
+  it("create — refuses another shop's branchId, and saves nothing", async () => {
+    prisma.customer.findFirst.mockResolvedValue({ id: 'cust-1' });
+    prisma.account.count.mockResolvedValue(1);
+
+    await expect(svc.create(TENANT, USER, {
+      name: 'Retainer', customerId: 'cust-1', branchId: 'branch-foreign',
+      frequency: 'MONTHLY', dayOfPeriod: 15, startDate: '2026-06-15',
+      lines: [{ accountId: 'acc-rev', unitPrice: 1000, lineTotal: 1000 }],
+    })).rejects.toThrow(ForbiddenException);
+    expect(prisma.recurringInvoiceTemplate.create).not.toHaveBeenCalled();
+    expect(numbering.next).not.toHaveBeenCalled();
+  });
+
+  it("create — still saves the shop's own branchId", async () => {
+    prisma.customer.findFirst.mockResolvedValue({ id: 'cust-1' });
+    prisma.account.count.mockResolvedValue(1);
+    prisma.recurringInvoiceTemplate.create.mockResolvedValue({ id: 'tpl-1' });
+
+    await svc.create(TENANT, USER, {
+      name: 'Retainer', customerId: 'cust-1', branchId: 'branch-own',
+      frequency: 'MONTHLY', dayOfPeriod: 15, startDate: '2026-06-15',
+      lines: [{ accountId: 'acc-rev', unitPrice: 1000, lineTotal: 1000 }],
+    });
+    expect(prisma.branch.findFirst).toHaveBeenCalledWith({
+      where: { id: 'branch-own', tenantId: TENANT }, select: { id: true },
+    });
+    expect(prisma.recurringInvoiceTemplate.create.mock.calls[0][0].data.branchId).toBe('branch-own');
   });
 
   it('pause — ACTIVE → PAUSED via conditional updateMany', async () => {

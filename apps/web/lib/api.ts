@@ -7,6 +7,8 @@ import { isDemoMode } from './demo/config';
 import { demoApi } from './demo/api';
 import { requestSlugConfirmation } from '@/components/admin/ConfirmSlugModal';
 import { requestSanityConfirmation, type SanityWarning } from '@/components/shared/SanityConfirmModal';
+import { readStoredSession, refreshFailureKeepsTill, shouldSendDeviceToken } from './session/shop-scope';
+import { signOut } from './session/sign-out';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api/v1';
 
@@ -115,13 +117,11 @@ function needsIdempotencyKey(method: string | undefined, url: string | undefined
 /* ─── Request interceptor — attach Bearer token + Idempotency-Key ────────── */
 realApi.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
+    let session = readStoredSession(null);
     try {
-      const raw = localStorage.getItem('app-auth');
-      if (raw) {
-        const { state } = JSON.parse(raw) as { state: { accessToken: string | null } };
-        if (state.accessToken) {
-          config.headers.Authorization = `Bearer ${state.accessToken}`;
-        }
+      session = readStoredSession(localStorage.getItem('app-auth'));
+      if (session.accessToken) {
+        config.headers.Authorization = `Bearer ${session.accessToken}`;
       }
     } catch {
       // ignore parse errors
@@ -133,13 +133,20 @@ realApi.interceptors.request.use((config) => {
     // sent it, so every api.* call from a paired tablet 401'd: the KDS queue
     // polled forever-empty while the same screen worked on a logged-in
     // laptop. One token, attached once here, covers queue/bump/serve and
-    // anything a display surface calls. When a JWT is also present it simply
-    // wins — the guard tries it first.
+    // anything a display surface calls. When a JWT is also present it wins —
+    // the guard tries it first — but the guard falls back to the pairing when
+    // the JWT has expired. So a signed-in user only ever sends a pairing of
+    // their own shop: a leftover pairing of another shop must never answer
+    // for this shop's screen once this shop's sign-in runs out.
     try {
       const rawDevice = localStorage.getItem(DEVICE_TOKEN_STORAGE_KEY);
       if (rawDevice) {
-        const parsed = JSON.parse(rawDevice) as { deviceToken?: string };
-        if (parsed?.deviceToken && !config.headers['X-Device-Token']) {
+        const parsed = JSON.parse(rawDevice) as { deviceToken?: string; tenantId?: string };
+        if (
+          parsed?.deviceToken &&
+          !config.headers['X-Device-Token'] &&
+          shouldSendDeviceToken(parsed.tenantId, { signedIn: !!session.accessToken, tenantId: session.tenantId })
+        ) {
           config.headers['X-Device-Token'] = parsed.deviceToken;
         }
       }
@@ -284,6 +291,16 @@ realApi.interceptors.response.use(
 
     isRefreshing = true;
 
+    // Whether this tab had a sign-in to lose. A paired screen has none: its
+    // 401s must not sign anybody out or empty its screen cache on every poll.
+    let hadSession = false;
+    try {
+      const s = readStoredSession(localStorage.getItem('app-auth'));
+      hadSession = !!(s.accessToken || s.refreshToken);
+    } catch {
+      // storage blocked — there is no stored sign-in to end
+    }
+
     try {
       const raw = localStorage.getItem('app-auth');
       const { state } = JSON.parse(raw ?? '{}') as { state: { refreshToken: string | null } };
@@ -331,11 +348,34 @@ realApi.interceptors.response.use(
       return realApi(original);
     } catch (err) {
       processQueue(err, null);
-      localStorage.removeItem('app-auth');
-      // Expire the web-origin mirror cookie so middleware doesn't see a
-      // stale token. The API's own HttpOnly copy gets cleared by the next
-      // failed /auth/refresh (401) or an explicit POST /auth/logout.
-      document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      if (hadSession) {
+        // The session is over: the same sign-out as every Sign Out button, so
+        // the cart, parked sales, open shift and screen cache of this shop are
+        // not left for whoever signs in next on this device. Nothing to revoke
+        // — the API just refused to renew it. If the API only failed to answer,
+        // the till is kept for this shop's next sign-in (refreshFailureKeepsTill).
+        // signOut also expires the web-origin mirror cookie; the API's own
+        // HttpOnly copy gets cleared by the next failed /auth/refresh (401) or
+        // an explicit POST /auth/logout.
+        try {
+          await signOut({ revoke: false, keepTill: refreshFailureKeepsTill(err) });
+        } catch (cleanupErr) {
+          // Never let the clean-up stand between an ended session and /login.
+          console.warn('Sign-out clean-up failed after the session ended:', cleanupErr);
+          localStorage.removeItem('app-auth');
+          document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        }
+        // Requests that 401'd while the clean-up ran queued behind this
+        // refresh; they fail with it rather than wait for a refresh that
+        // will never come.
+        processQueue(err, null);
+      } else {
+        localStorage.removeItem('app-auth');
+        // Expire the web-origin mirror cookie so middleware doesn't see a
+        // stale token. The API's own HttpOnly copy gets cleared by the next
+        // failed /auth/refresh (401) or an explicit POST /auth/logout.
+        document.cookie = 'app-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      }
       // Sprint 19 hotfix — guard the redirect. If we're already on /login
       // (e.g. an unauth'd query like /layouts fired from a globally-mounted
       // component), don't force-reload the page — that creates an infinite

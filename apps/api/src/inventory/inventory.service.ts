@@ -20,6 +20,7 @@ import { PH_TIMEZONE } from '@repo/shared-types';
 
 import { judgeMargin } from '@repo/shared-types';
 import { CostSanityService } from '../common/sanity/cost-sanity.service';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 import { SanityContext } from '../common/sanity/sanity.types';
 
 export { AdjustStockDto, SetThresholdDto, CreateRawMaterialDto, ReceiveRawMaterialDto };
@@ -629,6 +630,9 @@ export class InventoryService {
    * 32 characters is the usable width of an 80mm thermal roll.
    */
   private async lowStockSlipLines(tenantId: string, branchId: string) {
+    // branchId comes from the request and its name is printed on the slip, so
+    // it must be one of this shop's branches. Covers the slip and the print.
+    await assertBranchInTenant(this.prisma, tenantId, branchId);
     const [lowAll, branch] = await Promise.all([
       this.getLowStock(tenantId, branchId),
       this.prisma.branch.findUnique({ where: { id: branchId }, select: { name: true } }),
@@ -743,6 +747,8 @@ export class InventoryService {
    * whoever happens to be looking at the shelf.
    */
   async lowStockExport(tenantId: string, branchId: string): Promise<Buffer> {
+    // Same rule as the slip: the sheet's title names the branch from the request.
+    await assertBranchInTenant(this.prisma, tenantId, branchId);
     const [lowAll, vendors, branch, allMaterials] = await Promise.all([
       this.getLowStock(tenantId, branchId),
       this.prisma.vendor.findMany({

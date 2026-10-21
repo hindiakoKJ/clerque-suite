@@ -27,7 +27,11 @@ describe('a new account with no branch picked', () => {
       },
       // No plan row: the seat-quota branch is not what these tests are about.
       tenant: { findUnique: jest.fn().mockResolvedValue(null) },
-      branch: { findMany: jest.fn(async () => branches) },
+      branch: {
+        findMany:  jest.fn(async () => branches),
+        // A picked branch is checked against the shop first; these are all its own.
+        findFirst: jest.fn(async ({ where }: any) => ({ id: where.id })),
+      },
     };
     const audit: any = { log: jest.fn() };
     return { svc: new UsersService(prisma, audit), prisma, created };

@@ -33,6 +33,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { purchaseCostsVisibleTo, withoutCosts } from '../procure/cost-visibility';
 import { ProductsService, CreateProductDto, UpdateProductDto } from './products.service';
 import { SuperAdminGuard } from '../admin/admin.guard';
+import { assertBranchInTenant } from '../common/tenant-fk-guards';
 
 const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -55,6 +56,7 @@ export class ProductsController {
     @Query('includeInactive') includeInactive?: string,
     @Query('branchId') branchId?: string,
   ) {
+    await this.assertQueryBranch(user, branchId);
     const rows = await this.productsService.findAll(
       user.tenantId!,
       includeInactive === 'true',
@@ -75,6 +77,7 @@ export class ProductsController {
     @Query('branchId') branchId: string,
     @Query('customerId') customerId?: string,
   ) {
+    await this.assertQueryBranch(user, branchId);
     const tiles = await this.productsService.findForPos(
       user.tenantId!,
       branchId ?? user.branchId ?? '',
@@ -220,6 +223,18 @@ export class ProductsController {
     @Body() body: { items: Array<{ rawMaterialId: string; quantity: number }> },
   ) {
     return this.productsService.saveVariantBom(user.tenantId!, productId, variantId, body.items ?? []);
+  }
+
+  /**
+   * The list and the till read stock at the branch the query names, so it
+   * must be one of the caller's: another shop's branch id showed that shop's
+   * live ingredient stock. The caller's own branch, from the sign-in, needs
+   * no lookup -- it is what both routes fall back to anyway.
+   */
+  private async assertQueryBranch(user: JwtPayload, branchId?: string): Promise<void> {
+    if (branchId && branchId !== user.branchId) {
+      await assertBranchInTenant(this.prisma, user.tenantId!, branchId);
+    }
   }
 }
 

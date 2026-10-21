@@ -1,7 +1,35 @@
 import { db } from './db';
 import { api } from '@/lib/api';
+import { readStoredSession } from '@/lib/session/shop-scope';
+import { isUnclaimedSaleOf, ownsQueuedSale, queueOwnerFrom, sameShop, type QueueOwner } from './pending-scope';
 
 const MAX_RETRIES = 5;
+
+/**
+ * The shop whose token the API client will send right now. Read from the same
+ * stored sign-in the request interceptor reads, at the moment of use, so the
+ * sales picked and the token they go out under always belong to one shop.
+ */
+export function signedInQueueOwner(): QueueOwner | null {
+  if (typeof window === 'undefined') return null;
+  let raw: string | null = null;
+  try { raw = localStorage.getItem('app-auth'); } catch { return null; }
+  const s = readStoredSession(raw);
+  if (!s.accessToken) return null;
+  return queueOwnerFrom({ tenantId: s.tenantId, branchId: s.branchId, sub: s.userId });
+}
+
+/**
+ * Stamp this shop on sales queued before the shop was recorded, when their
+ * branch proves they are this shop's (see isUnclaimedSaleOf). From then on
+ * they are matched by shop like every new sale.
+ */
+export async function claimUnclaimedOrders(owner: QueueOwner | null): Promise<number> {
+  if (!owner) return 0;
+  return db.pendingOrders
+    .filter((o) => isUnclaimedSaleOf(owner, o))
+    .modify({ tenantId: owner.tenantId });
+}
 
 interface SyncResult {
   clientUuid: string;
@@ -37,10 +65,18 @@ export async function recoverStrandedOrders(): Promise<number> {
 export async function syncPendingOrders(): Promise<{ synced: number; failed: number; abandoned: number }> {
   await recoverStrandedOrders();
 
-  const all = await db.pendingOrders
+  // Only the signed-in shop's sales are sent. Another shop's sales would be
+  // refused under this token and then parked as failed here, so that shop's
+  // paid sales never reached its books. They wait, untouched, for that shop.
+  const owner = signedInQueueOwner();
+  if (!owner) return { synced: 0, failed: 0, abandoned: 0 };
+  await claimUnclaimedOrders(owner);
+
+  const all = (await db.pendingOrders
     .where('status')
     .anyOf(['PENDING', 'FAILED'])
-    .toArray();
+    .toArray())
+    .filter((o) => ownsQueuedSale(owner, o));
 
   // Permanently abandon orders that have exceeded the retry cap
   const overLimit = all.filter((o) => o.retries >= MAX_RETRIES);
@@ -58,6 +94,10 @@ export async function syncPendingOrders(): Promise<{ synced: number; failed: num
   const BATCH = 10;
 
   for (let i = 0; i < pending.length; i += BATCH) {
+    // A sign-out and another shop's sign-in can land between batches. The
+    // rest stay PENDING, untouched, for their own shop's next sync.
+    if (!sameShop(owner, signedInQueueOwner())) break;
+
     const batch   = pending.slice(i, i + BATCH);
     const ids     = batch.map((o) => o.id!);
     const payloads = batch.map((o) => o.payload);

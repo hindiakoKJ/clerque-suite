@@ -3,18 +3,40 @@ import { useCallback, useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { toast } from 'sonner';
 import { db } from '@/lib/pos/db';
-import { syncPendingOrders, recoverStrandedOrders } from '@/lib/pos/sync';
+import { syncPendingOrders, recoverStrandedOrders, claimUnclaimedOrders } from '@/lib/pos/sync';
+import { ownsQueuedSale, queueOwnerFrom } from '@/lib/pos/pending-scope';
+import { useAuthStore } from '@/store/auth';
 import { useOnlineStatus } from './useOnlineStatus';
 
 export function usePendingSync() {
   const isOnline  = useOnlineStatus();
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // The badge counts this shop's queued sales only. On a shared tablet another
+  // shop's offline sales may also be waiting; they are not this shop's to see.
+  const user     = useAuthStore((s) => s.user);
+  const tenantId = user?.tenantId ?? null;
+  const branchId = user?.branchId ?? null;
+  const userId   = user?.sub ?? null;
+
   const pendingCount = useLiveQuery(
-    () => db.pendingOrders.where('status').anyOf(['PENDING', 'FAILED']).count(),
-    [],
+    () => {
+      const owner = queueOwnerFrom({ tenantId, branchId, sub: userId });
+      return db.pendingOrders
+        .where('status')
+        .anyOf(['PENDING', 'FAILED'])
+        .filter((o) => ownsQueuedSale(owner, o))
+        .count();
+    },
+    [tenantId, branchId, userId],
     0,
   );
+
+  // Sales queued by a build that did not record the shop: stamp them as this
+  // shop's when their branch proves it, so they are matched by shop from now on.
+  useEffect(() => {
+    void claimUnclaimedOrders(queueOwnerFrom({ tenantId, branchId, sub: userId }));
+  }, [tenantId, branchId, userId]);
 
   const triggerSync = useCallback(async () => {
     if (isSyncing || !pendingCount) return;

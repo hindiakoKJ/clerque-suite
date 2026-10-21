@@ -2,7 +2,8 @@
  * BackupService — read-side of the backup pipeline.
  *
  * The scheduler in `backup.scheduler.ts` writes nightly JSON snapshots to
- * R2/S3 under `backups/<YYYY-MM-DD>/<tenant-slug>.json`. This service is
+ * R2/S3 under `backups/<YYYY-MM-DD>/<random>/<tenant-slug>.json` (older
+ * snapshots: `backups/<YYYY-MM-DD>/<tenant-slug>.json`). This service is
  * the symmetrical READ path: it lets the platform admin enumerate snapshots
  * for any tenant and lets a tenant owner download their own latest copy
  * for cold-storage / off-system custody.
@@ -32,7 +33,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 
 export interface BackupSnapshotMeta {
-  key:          string;          // R2/S3 key: backups/2026-05-10/clerque-test.json
+  key:          string;          // R2/S3 key: backups/2026-05-10/<random>/clerque-test.json
   date:         string;          // PH-local YYYY-MM-DD parsed from the key
   sizeBytes:    number;
   sizeKb:       number;          // rounded for UI
@@ -50,9 +51,10 @@ export class BackupService {
 
   /**
    * List every snapshot we have for a given tenant slug. Snapshots are keyed
-   * `backups/<YYYY-MM-DD>/<slug>.json`. We list under `backups/` and filter
-   * by suffix because R2/S3 only lets us prefix-filter; this is fine for
-   * <10 years of nightly snapshots (~3650 keys).
+   * `backups/<YYYY-MM-DD>/<random>/<slug>.json` (older ones without the
+   * random folder). We list under `backups/` and filter by suffix because
+   * R2/S3 only lets us prefix-filter; this is fine for <10 years of nightly
+   * snapshots (~3650 keys).
    *
    * Returns newest-first so the owner sees their last-night snapshot at the
    * top of the list.
@@ -70,7 +72,7 @@ export class BackupService {
     const rows = objects
       .filter((o) => o.key.endsWith(needle))
       .map<BackupSnapshotMeta>((o) => {
-        // key shape: backups/2026-05-10/<slug>.json — extract the date.
+        // key shape: backups/2026-05-10/[<random>/]<slug>.json — extract the date.
         const m = /^backups\/(\d{4}-\d{2}-\d{2})\//.exec(o.key);
         return {
           key:          o.key,
@@ -81,7 +83,12 @@ export class BackupService {
         };
       })
       .filter((r) => r.date) // drop malformed keys
-      .sort((a, b) => b.date.localeCompare(a.date));
+      // Newest day first; within a day, the newest write. A re-run used to
+      // overwrite the same key, but each write now gets its own random
+      // folder, so one day can hold two copies and the later one should win.
+      .sort((a, b) =>
+        b.date.localeCompare(a.date) ||
+        (b.lastModified ?? '').localeCompare(a.lastModified ?? ''));
     return rows;
   }
 

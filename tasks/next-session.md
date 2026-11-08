@@ -200,6 +200,24 @@ Found by the same map, wrong today with or without MariBank:
   staff accounts, stations, reorder levels, prep items.
 - Telegram: he links his phone (Settings → Telegram alerts).
 
+## Carolina Picklepop, the second tenant (KJ, 8 Nov)
+
+- Same owner as Cafe Carolina (Anne) but **its own TIN**, so it is a
+  separate tenant, not a branch: its own books, receipts, BIR status and
+  payroll. Anne gets a second login under its own company code.
+- Business type **RETAIL**: its own menu, retail only, nothing cooked or
+  made by a barista. No Copy setup from Carolina; a short import of its items.
+- Court booking stays in the separate PicklePop app. Online court payments
+  should later post to Picklepop's Ledger (API key / ingest), not Carolina's.
+- Order on site: finish Carolina's test shop, copy into the real Carolina,
+  then create Picklepop.
+- Payroll for either shop waits on the Sync errors found on 9 Oct (overtime
+  at 2.25×, old SSS table, PhilHealth on overtime, punches between pay runs,
+  lunch counted as overtime). None fixed as of 8 Nov.
+- AIBA (app.aiba.pro) does not do projects with Clerque. It becomes the
+  processor for the coming finance and accounting, inventory and payroll AI
+  agents.
+
 ## Tenant isolation safety net (21 Oct)
 
 Every query on a shop table (108 tables with a required tenantId) made during

@@ -18,17 +18,19 @@ HNScorpPH landing page lives in the separate `hns-corp-ph` repo, not here.
    In a cloud session, first run `bash scripts/cloud-session-setup.sh`
    (`docs/OPERATIONS.md` section 7).
 
-On KJ's desktop only, the session's memory files add history and reasoning:
-`C:\Users\user\.claude\projects\E--AI-Projects\memory\` (`project_clerque.md`,
-`arch_decisions.md`, `feedback.md`, `user_profile.md`). A cloud session does
-not have them; `docs/OPERATIONS.md` carries what matters from them.
+On KJ's desktop only, the session's memory folder adds history and reasoning:
+`C:\Users\krist\.claude\projects\C--Users-krist-Claude-AI-Projects-app-suite\memory\`.
+The older memory files (`project_clerque.md`, `arch_decisions.md`,
+`feedback.md`, `user_profile.md`) were lost when the PC was reformatted in
+Nov 2026. `docs/OPERATIONS.md` carries what mattered from them, and a cloud
+session works from it too.
 
 ---
 
 ## Monorepo Layout
 
 ```
-E:\AI Projects\app-suite\
+C:\Users\krist\Claude\AI Projects\app-suite\
 ├── apps/
 │   ├── web/          ← Next.js frontend (Clerque UI, port 3000)
 │   ├── api/          ← NestJS backend (port 3001)
@@ -54,7 +56,8 @@ E:\AI Projects\app-suite\
 
 ## What's Already Built
 
-All 10 planned phases are complete. See `project_clerque.md` for the full list.
+All 10 planned phases are complete. For what is built, see `docs/OPERATIONS.md`,
+`tasks/next-session.md`, `tasks/todo.md` and the git history.
 
 **Remaining deferred features (potential next work):**
 1. Payroll computation engine (TimeEntry + PayRun schema already exist)
@@ -72,8 +75,8 @@ All 10 planned phases are complete. See `project_clerque.md` for the full list.
   branch with a PR and waits for KJ's word (`start.sh` migrates on deploy).
 - One next action for KJ, not a menu. Verify before claiming done.
 - Check what is already built before proposing a feature (`docs/OPERATIONS.md`,
-  and on the desktop `project_clerque.md`). Locked decisions in
-  `arch_decisions.md` are not re-litigated.
+  `tasks/`, git history). Decisions already made there and in the code are not
+  re-litigated; when the reason behind one is unclear, ask KJ rather than undo it.
 - No DB triggers — use NestJS `@Cron` or BullMQ
 - SOD rules enforced at service layer, not DB
 - BusinessType is the primary feature gate

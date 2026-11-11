@@ -46,7 +46,10 @@ export function CloseShiftModal({ open, shift, onClose, onConfirm }: CloseShiftM
     try {
       await onConfirm(declared, notes || undefined);
     } catch (err: unknown) {
-      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Failed to close shift.');
+      const fromServer = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      // A refusal raised on the device (offline sales not sent) has no server response.
+      const onDevice = !(err as { response?: unknown })?.response && err instanceof Error ? err.message : undefined;
+      setError(fromServer ?? onDevice ?? 'Failed to close shift.');
     } finally {
       setLoading(false);
     }

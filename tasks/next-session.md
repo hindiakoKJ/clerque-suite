@@ -211,9 +211,15 @@ Found by the same map, wrong today with or without MariBank:
   should later post to Picklepop's Ledger (API key / ingest), not Carolina's.
 - Order on site: finish Carolina's test shop, copy into the real Carolina,
   then create Picklepop.
-- Payroll for either shop waits on the Sync errors found on 9 Oct (overtime
-  at 2.25×, old SSS table, PhilHealth on overtime, punches between pay runs,
-  lunch counted as overtime). None fixed as of 8 Nov.
+- Sync pay maths fixed 11 Nov (`fa80a66`): overtime paid once at 1.25×,
+  SSS 2025 table (MSC 5,000-35,000, centred bands, EC 10/30), PhilHealth on
+  basic only, pay runs cover whole Manila days and refuse overlapping dates,
+  kiosk punches over 5 h lose the 60-minute meal period
+  (`payroll/pay-time.ts`). Still missing before real payroll: an employee
+  list with SSS/PhilHealth/Pag-IBIG/TIN (needs a migration), time
+  corrections, holiday/night/rest-day pay, minimum-wage tax exemption,
+  13th month payout, the signed payroll sheet and the government reports.
+  KJ to confirm the kiosk meal rule (60 min off any punch over 5 h).
 - AIBA (app.aiba.pro) does not do projects with Clerque. It becomes the
   processor for the coming finance and accounting, inventory and payroll AI
   agents.

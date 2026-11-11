@@ -30,6 +30,7 @@ import { useShiftStore } from '@/store/pos/shift';
 import { useShiftGuard } from '@/hooks/pos/useShiftGuard';
 import { usePendingSync } from '@/hooks/pos/usePendingSync';
 import { closeShift, getShiftSummary } from '@/lib/pos/shifts';
+import { syncPendingOrders, unsyncedSalesForSignedInShop } from '@/lib/pos/sync';
 import { api } from '@/lib/api';
 import { db } from '@/lib/pos/db';
 import { signOut } from '@/lib/session/sign-out';
@@ -659,6 +660,20 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
   async function handleCloseShift(closingCashDeclared: number, notes?: string) {
     if (!activeShift) return;
     const shiftId = activeShift.id;
+    // Offline sales still on this device are missing from the drawer's
+    // expected cash. Send them first; refuse to close while any remain, or
+    // the count is short and the sales reach the books after the drawer.
+    if (await unsyncedSalesForSignedInShop() > 0) {
+      if (navigator.onLine) {
+        try { await syncPendingOrders(); } catch { /* counted below */ }
+      }
+      const left = await unsyncedSalesForSignedInShop();
+      if (left > 0) {
+        throw new Error(
+          `${left} offline sale${left > 1 ? 's are' : ' is'} not sent yet. Open Pending Sync, send ${left > 1 ? 'them' : 'it'} (or fix what was refused), then close the drawer.`,
+        );
+      }
+    }
     await closeShift(shiftId, closingCashDeclared, notes);
     setShowCloseShift(false);
     toast.success('Shift closed successfully.');

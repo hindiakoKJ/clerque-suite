@@ -1,9 +1,9 @@
 'use client';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { RefreshCw, Printer, WifiOff, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
+import { RefreshCw, Printer, WifiOff, ChevronDown, ChevronUp, Trash2, RotateCcw } from 'lucide-react';
 import { db } from '@/lib/pos/db';
-import { signedInQueueOwner, syncPendingOrders } from '@/lib/pos/sync';
+import { retryQueuedSale, signedInQueueOwner, syncPendingOrders } from '@/lib/pos/sync';
 import { ownsQueuedSale, queueOwnerFrom, splitQueue } from '@/lib/pos/pending-scope';
 import { formatPeso } from '@/lib/utils';
 import { useOnlineStatus } from '@/hooks/pos/useOnlineStatus';
@@ -62,6 +62,15 @@ export default function PendingOrdersPage() {
     } finally {
       setSyncing(false);
     }
+  }
+
+  async function handleRetry(id: number) {
+    if (!(await retryQueuedSale(id))) {
+      toast.error('That order is not in your shop.');
+      return;
+    }
+    if (!isOnline) { toast('Queued again. It will be sent when you are back online.'); return; }
+    await handleSync();
   }
 
   async function handleDelete(id: number) {
@@ -207,6 +216,17 @@ export default function PendingOrdersPage() {
                     >
                       <Printer className="h-4 w-4" />
                     </button>
+                    {order.status === 'FAILED' && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); void handleRetry(order.id!); }}
+                        disabled={syncing}
+                        className="flex items-center gap-1 text-xs font-medium text-[var(--accent)] hover:opacity-80 disabled:opacity-50 transition-opacity"
+                        title="Try sending this order again"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                        Try again
+                      </button>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleDelete(order.id!); }}
                       className="text-muted-foreground hover:text-red-400 transition-colors"

@@ -62,6 +62,35 @@ export async function recoverStrandedOrders(): Promise<number> {
   return db.pendingOrders.where('status').equals('SYNCING').modify({ status: 'PENDING' });
 }
 
+/**
+ * Offline sales of the signed-in shop that have not reached the server yet,
+ * in any state. A drawer must not close while this is above 0: its count
+ * would be short by those sales.
+ */
+export async function unsyncedSalesForSignedInShop(): Promise<number> {
+  const owner = signedInQueueOwner();
+  if (!owner) return 0;
+  const rows = await db.pendingOrders.toArray();
+  return rows.filter((o) => ownsQueuedSale(owner, o)).length;
+}
+
+/**
+ * Put a refused or abandoned sale back in the queue with a fresh retry
+ * budget, once the cause is fixed (a period reopened, a product restored, the
+ * connection back). Before, Delete was the only button on such a sale.
+ */
+export async function retryQueuedSale(id: number): Promise<boolean> {
+  const row = await db.pendingOrders.get(id);
+  if (!row || !ownsQueuedSale(signedInQueueOwner(), row)) return false;
+  await db.pendingOrders.update(id, { status: 'PENDING', retries: 0, lastError: undefined });
+  return true;
+}
+
+/** A request that never got an answer (offline, timeout). Says nothing about the sale. */
+function isNoResponse(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'isAxiosError' in err && !(err as { response?: unknown }).response;
+}
+
 export async function syncPendingOrders(): Promise<{ synced: number; failed: number; abandoned: number }> {
   await recoverStrandedOrders();
 
@@ -163,9 +192,13 @@ export async function syncPendingOrders(): Promise<{ synced: number; failed: num
       // would print drinks that were served an hour ago.
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Network error';
+      // No answer at all (still offline, timed out) does not count against
+      // the sale: a long outage used to burn the 5 tries and park every sale
+      // of the day as abandoned.
+      const countsAsTry = !isNoResponse(err);
       await db.pendingOrders.where('id').anyOf(ids).modify((o) => {
         o.status  = 'PENDING';
-        o.retries += 1;
+        if (countsAsTry) o.retries += 1;
         o.lastError = message;
       });
       failed += batch.length;

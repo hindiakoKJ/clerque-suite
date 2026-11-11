@@ -71,7 +71,7 @@ export class ReceivingDraftsService {
     });
     if (claimed.count === 0) throw new ConflictException('This draft is being received right now.');
 
-    let outcomes: LineOutcome[] = [];
+    const outcomes: LineOutcome[] = [];
     try {
       const lines = draft.lines as unknown as ReceivingLine[];
       const firstTry = draft.result == null;

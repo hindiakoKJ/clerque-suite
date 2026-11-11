@@ -6,8 +6,9 @@
  * not deducted from net pay.
  *
  * Sources / authority:
- *   - SSS Circular 2022-033 — 14% total (4.5% EE / 9.5% ER) + ₱30 EC for ER,
- *     MSC bands ₱4,000–₱30,000 in ₱500 steps (effective 2023-01).
+ *   - SSS Circular 2024-006 — 15% total (5% EE / 10% ER) + EC for ER
+ *     (₱10 below an MSC of ₱15,000, ₱30 from it), MSC bands
+ *     ₱5,000–₱35,000 in ₱500 steps (effective 2025-01).
  *   - PhilHealth Circular 2024-0006 — 5.0% premium, split 50/50, floor
  *     income ₱10,000 → ₱500 EE/ER, cap income ₱100,000 → ₱5,000 EE/ER
  *     (effective 2024-07; we use the EE/ER ₱2,500 cap on ₱100k for now —
@@ -38,33 +39,29 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // SSS — 2025 Contribution Schedule
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// MSC bands run from ₱4,000 (compensation < ₱4,250) up to ₱30,000
-// (compensation ≥ ₱29,750), in ₱500 steps. EE share = MSC × 5%, ER share =
-// MSC × 10% + ₱30 EC.
-//
-// (The schedule changed from 4.5% → 5% EE on 2025-01 per RA 11199 §4 +
-// SSS Circular 2024-006. Update this constant if SSS revises again.)
+// 2025 schedule (SSS Circular 2024-006, RA 11199): 15% of the MSC, 5% EE /
+// 10% ER. MSC bands run from ₱5,000 (compensation below ₱5,250) up to
+// ₱35,000 (compensation ₱34,750 and up), in ₱500 steps. Above ₱20,000 part
+// of the same 15% goes to the MPF (WISP) — the totals are unchanged.
+// EC (employer only): ₱10 for an MSC below ₱15,000, ₱30 from ₱15,000.
 
 const SSS_EE_RATE = 0.05;  // 2025 employee share rate
 const SSS_ER_RATE = 0.10;  // 2025 employer share rate
-const SSS_EC_FLAT = 30;    // Employees' Compensation premium — ER only
-const SSS_MSC_MIN = 4_000;
-const SSS_MSC_MAX = 30_000;
+const SSS_EC_LOW  = 10;    // Employees' Compensation, MSC below ₱15,000
+const SSS_EC_HIGH = 30;    // Employees' Compensation, MSC ₱15,000 and up
+const SSS_EC_SPLIT = 15_000;
+const SSS_MSC_MIN = 5_000;
+const SSS_MSC_MAX = 35_000;
 const SSS_MSC_STEP = 500;
 
 /**
- * Map monthly compensation → MSC. The official table buckets compensation
- * by half-step boundaries (e.g. ₱14,750–₱15,249.99 → MSC ₱15,000), but
- * rounding up-to-nearest-₱500 with a centered offset is a clean equivalent
- * to within ±₱1 for any compensation:
+ * Map monthly compensation → MSC. Each band is centred on its MSC:
+ * ₱14,750.00–₱15,249.99 → ₱15,000, ₱15,250.00–₱15,749.99 → ₱15,500.
  *
- *   bucket = round( (gross - 250) / 500 ) * 500    // centered rounding
- *   MSC    = clamp(bucket, ₱4,000, ₱30,000)
+ *   MSC = clamp( floor((gross + 250) / 500) × 500, ₱5,000, ₱35,000 )
  */
 export function sssMsc(monthlyGross: number): number {
-  if (monthlyGross < SSS_MSC_MIN + 250) return SSS_MSC_MIN;
-  if (monthlyGross >= SSS_MSC_MAX - 250) return SSS_MSC_MAX;
-  const bucket = Math.round((monthlyGross - 250) / SSS_MSC_STEP) * SSS_MSC_STEP;
+  const bucket = Math.floor((round2(monthlyGross) + 250) / SSS_MSC_STEP) * SSS_MSC_STEP;
   return Math.max(SSS_MSC_MIN, Math.min(SSS_MSC_MAX, bucket));
 }
 
@@ -75,7 +72,7 @@ export function sssMonthly(monthlyGross: number): { ee: number; er: number; ec: 
     msc,
     ee: round2(msc * SSS_EE_RATE),
     er: round2(msc * SSS_ER_RATE),
-    ec: SSS_EC_FLAT,
+    ec: msc < SSS_EC_SPLIT ? SSS_EC_LOW : SSS_EC_HIGH,
   };
 }
 
@@ -290,13 +287,15 @@ export function computePayslip(input: {
   const gross         = round2(input.basicPay + input.otPay + input.allowances);
   const taxableBase   = round2(input.basicPay + input.otPay);   // allowances excluded
   const monthlyEquiv  = toMonthlyGross(taxableBase, input.freq);
+  // PhilHealth's premium is on the monthly BASIC salary only (no overtime).
+  const monthlyBasic  = toMonthlyGross(round2(input.basicPay), input.freq);
 
   const sss        = sssMonthly(monthlyEquiv);
   const sssEe      = round2(sss.ee * freqFactor(input.freq));
   const sssEr      = round2(sss.er * freqFactor(input.freq));
   const sssEc      = round2(sss.ec * freqFactor(input.freq));
 
-  const ph         = philhealthMonthly(monthlyEquiv);
+  const ph         = philhealthMonthly(monthlyBasic);
   const philhealthEe = round2(ph.ee * freqFactor(input.freq));
   const philhealthEr = round2(ph.er * freqFactor(input.freq));
 

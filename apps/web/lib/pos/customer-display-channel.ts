@@ -180,6 +180,7 @@ export function publishCustomerDisplay(state: Omit<CustomerDisplayState, 'seq' |
     cashierName:    payload.cashierName,
     branchName:     payload.branchName,
     businessName:   payload.businessName,
+    paymentMethod:  payload.paymentMethod,
   }).catch(() => { /* swallow — local channels usually carry the message */ });
 }
 
@@ -309,6 +310,7 @@ export function subscribeCustomerDisplay(
           cashierName?: string;
           branchName?: string;
           businessName?: string;
+          paymentMethod?: CustomerDisplayState['paymentMethod'];
         }>(
           // The shared api client attaches the paired-device token (and/or
           // JWT) itself — one mechanism for every display surface.
@@ -336,6 +338,7 @@ export function subscribeCustomerDisplay(
           cashierName:    data.cashierName,
           branchName:     data.branchName,
           businessName:   data.businessName,
+          paymentMethod:  data.paymentMethod,
           seq:            seq,
           ts:             Date.now(),
         };

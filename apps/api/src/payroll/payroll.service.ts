@@ -17,6 +17,7 @@ import {
   computePayslip,
   type PayFreq as PhPayFreq,
 } from './ph-tax-tables';
+import { hoursWorked, regularHours, payRunWindow, manilaDayOfWeek, periodsOverlap } from './pay-time';
 
 // ─── Response shapes (match what the frontend expects) ───────────────────────
 
@@ -242,9 +243,9 @@ export class PayrollService {
 
     const clockOut   = new Date();
     const totalMins  = (clockOut.getTime() - open.clockIn.getTime()) / 60_000;
-    const workedMins = Math.max(totalMins - breakMins, 0);
-    const grossHours = new Prisma.Decimal((workedMins / 60).toFixed(2));
-    const otHours    = new Prisma.Decimal(Math.max(Number(grossHours) - 8, 0).toFixed(2));
+    const worked     = hoursWorked(totalMins, breakMins);
+    const grossHours = new Prisma.Decimal(worked.grossHours.toFixed(2));
+    const otHours    = new Prisma.Decimal(worked.otHours.toFixed(2));
 
     await this.prisma.timeEntry.update({
       where: { id: open.id },
@@ -397,7 +398,7 @@ export class PayrollService {
       let hasApproved  = false;
 
       for (const e of userEntries) {
-        const dow = e.clockIn.getUTCDay(); // 0=Sun … 6=Sat
+        const dow = manilaDayOfWeek(e.clockIn); // 0=Sun … 6=Sat, Manila time
         const h   = Number(e.grossHours ?? 0);
         const ot  = Number(e.otHours   ?? 0);
         const key = DOW_KEYS[dow];
@@ -607,12 +608,32 @@ export class PayrollService {
     tenantId: string,
     dto: { label: string; periodStart: string; periodEnd: string; frequency: 'WEEKLY' | 'SEMI_MONTHLY' | 'MONTHLY'; notes?: string },
   ): Promise<PayRunDto> {
+    const periodStart = new Date(dto.periodStart);
+    const periodEnd   = new Date(dto.periodEnd);
+    if (Number.isNaN(periodStart.getTime()) || Number.isNaN(periodEnd.getTime())) {
+      throw new BadRequestException('Period start and end must be dates (YYYY-MM-DD).');
+    }
+    if (periodEnd < periodStart) {
+      throw new BadRequestException('The period ends before it starts.');
+    }
+    // Two runs covering the same day would pay that day twice.
+    const others = await this.prisma.payRun.findMany({
+      where:  { tenantId, status: { not: 'CANCELLED' as any } },
+      select: { label: true, periodStart: true, periodEnd: true },
+    });
+    const clash = others.find((r) => periodsOverlap(periodStart, periodEnd, r.periodStart, r.periodEnd));
+    if (clash) {
+      const d = (x: Date) => x.toISOString().slice(0, 10);
+      throw new BadRequestException(
+        `These dates overlap the pay run "${clash.label}" (${d(clash.periodStart)} to ${d(clash.periodEnd)}). Cancel that run or pick other dates.`,
+      );
+    }
     const run = await this.prisma.payRun.create({
       data: {
         tenantId,
         label:       dto.label,
-        periodStart: new Date(dto.periodStart),
-        periodEnd:   new Date(dto.periodEnd),
+        periodStart,
+        periodEnd,
         frequency:   dto.frequency as any,
         status:      'DRAFT' as any,
         notes:       dto.notes ?? null,
@@ -643,12 +664,13 @@ export class PayrollService {
       select: { id: true, name: true, position: true, salaryRate: true, salaryType: true, branch: { select: { name: true } } },
     });
 
-    // Get all approved/closed TimeEntry in the pay period
+    // Get all approved/closed TimeEntry in the pay period (Manila days, end exclusive)
+    const window = payRunWindow(run.periodStart, run.periodEnd);
     const entries = await this.prisma.timeEntry.findMany({
       where: {
         tenantId,
         status:  { in: ['CLOSED', 'APPROVED'] as any[] },
-        clockIn: { gte: run.periodStart, lte: run.periodEnd },
+        clockIn: { gte: window.from, lt: window.to },
       },
       select: { userId: true, grossHours: true, otHours: true },
     });
@@ -657,8 +679,10 @@ export class PayrollService {
     const hoursByEmployee = new Map<string, { regular: number; ot: number }>();
     for (const e of entries) {
       const h = hoursByEmployee.get(e.userId) ?? { regular: 0, ot: 0 };
-      h.regular += Number(e.grossHours ?? 0);
-      h.ot      += Number(e.otHours   ?? 0);
+      const gross = Number(e.grossHours ?? 0);
+      const ot    = Number(e.otHours   ?? 0);
+      h.regular += regularHours(gross, ot); // grossHours includes the overtime
+      h.ot      += ot;
       hoursByEmployee.set(e.userId, h);
     }
 

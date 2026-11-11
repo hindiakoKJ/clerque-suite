@@ -16,22 +16,31 @@ import {
 } from './ph-tax-tables';
 
 describe('PH Tax Tables', () => {
-  describe('SSS — 2025 contribution schedule (5% EE / 10% ER + ₱30 EC)', () => {
-    it('floors MSC at ₱4,000 for very low earners', () => {
-      expect(sssMsc(2_000)).toBe(4_000);
-      expect(sssMonthly(2_000).ee).toBe(200);   // 4000 × 5%
+  describe('SSS — 2025 contribution schedule (5% EE / 10% ER, MSC ₱5,000–₱35,000)', () => {
+    it('floors MSC at ₱5,000 for very low earners', () => {
+      expect(sssMsc(2_000)).toBe(5_000);
+      expect(sssMsc(5_249.99)).toBe(5_000);
+      expect(sssMonthly(2_000).ee).toBe(250);   // 5000 × 5%
     });
 
-    it('caps MSC at ₱30,000 for high earners', () => {
-      expect(sssMsc(50_000)).toBe(30_000);
-      expect(sssMonthly(50_000).ee).toBe(1_500); // 30000 × 5%
+    it('caps MSC at ₱35,000 for high earners', () => {
+      expect(sssMsc(34_749.99)).toBe(34_500);
+      expect(sssMsc(34_750)).toBe(35_000);
+      expect(sssMsc(50_000)).toBe(35_000);
+      expect(sssMonthly(50_000).ee).toBe(1_750); // 35000 × 5%
     });
 
-    it('rounds to ₱500 buckets', () => {
-      // ₱14,750 → bucket 14,500
-      expect(sssMsc(14_750)).toBe(14_500);
-      // ₱15,250 (just above midpoint) → 15,000
-      expect(sssMsc(15_250)).toBe(15_000);
+    it('each ₱500 band is centred on its MSC (official table boundaries)', () => {
+      expect(sssMsc(5_250)).toBe(5_500);
+      expect(sssMsc(14_749.99)).toBe(14_500);
+      expect(sssMsc(14_750)).toBe(15_000);
+      expect(sssMsc(15_249.99)).toBe(15_000);
+      expect(sssMsc(15_250)).toBe(15_500);
+    });
+
+    it('EC is ₱10 below an MSC of ₱15,000 and ₱30 from it', () => {
+      expect(sssMonthly(14_749.99).ec).toBe(10);
+      expect(sssMonthly(14_750).ec).toBe(30);
     });
 
     it('₱20,000 monthly → MSC ₱20,000 / EE ₱1,000 / ER ₱2,000 / EC ₱30', () => {
@@ -190,6 +199,20 @@ describe('PH Tax Tables', () => {
       expect(slip.withholdingTax).toBe(0);
       // SSS MSC for 16k → 16,000 → ee 800/mo → 400 semi-monthly
       expect(slip.sssEe).toBe(400);
+    });
+
+    it('PhilHealth is on basic pay only; SSS counts the overtime', () => {
+      const slip = computePayslip({
+        basicPay:   10_000,   // ₱20k/mo basic
+        otPay:      2_500,    // ₱25k/mo with overtime
+        allowances: 0,
+        freq:       'SEMI_MONTHLY',
+      });
+      // PH: 20,000 × 5% / 2 = 500/mo → 250 semi-monthly (not 312.50 on 25k)
+      expect(slip.philhealthEe).toBe(250);
+      // SSS: MSC 25,000 → 1,250/mo → 625 semi-monthly
+      expect(slip.sssEe).toBe(625);
+      expect(slip.sssEc).toBe(15); // ₱30 EC split over two runs
     });
   });
 });

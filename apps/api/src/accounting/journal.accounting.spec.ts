@@ -718,6 +718,38 @@ describe('JournalService — accounting correctness across business types', () =
       expect(s.credits.get('1010')).toBeCloseTo(120, 2);
       expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
     });
+
+    it('fallback void of a GCash sale credits 1031, not the cash drawer', async () => {
+      const lines = await runProcessEvent({
+        orderId:             'order-4',
+        orderNumber:         'ORD-2026-0004',
+        totalAmount:         120,
+        vatAmount:           12.86,
+        payments:            [{ method: 'GCASH_PERSONAL', amount: 120 }],
+        restockedCogsTotal:  0,
+      }, 'VOID') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.credits.get('1031')).toBeCloseTo(120, 2);
+      expect(s.credits.get('1010') ?? 0).toBe(0);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
+
+    it('fallback void of a split sale reverses cash and wallet in the same split', async () => {
+      const lines = await runProcessEvent({
+        orderId:             'order-5',
+        orderNumber:         'ORD-2026-0005',
+        totalAmount:         200,
+        vatAmount:           21.43,
+        payments:            [{ method: 'CASH', amount: 50 }, { method: 'MAYA_PERSONAL', amount: 150 }],
+        restockedCogsTotal:  0,
+      }, 'VOID') as CapturedLine[];
+
+      const s = summarise(lines);
+      expect(s.credits.get('1010')).toBeCloseTo(50, 2);
+      expect(s.credits.get('1031')).toBeCloseTo(150, 2);
+      expect(s.debitTotal).toBeCloseTo(s.creditTotal, 2);
+    });
   });
 
   describe('VOID event — FULL_VOID after an item refund', () => {

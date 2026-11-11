@@ -20,6 +20,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { TimeEntryStatus } from '@prisma/client';
 import * as crypto from 'crypto';
+import { hoursWorked, kioskBreakMins } from '../pay-time';
 
 const MAX_FAILED = 5;
 const LOCKOUT_MS = 30_000; // 30 seconds — discourages brute-force without
@@ -275,18 +276,19 @@ export class KioskService {
     let at: Date;
 
     if (open) {
-      // Clock out. Compute hours like PayrollService.clockOut() (no breaks
-      // captured at the kiosk — staff can fix breaks in the Sync app later).
+      // Clock out. The kiosk captures no break, so a punch over 5 hours has
+      // the 60-minute unpaid meal period taken off (pay-time.ts); without it
+      // the lunch hour was paid, as overtime.
       const clockOut  = new Date();
       const totalMins = (clockOut.getTime() - open.clockIn.getTime()) / 60_000;
-      const grossHours = +(totalMins / 60).toFixed(2);
-      const otHours    = Math.max(grossHours - 8, 0);
+      const breakMins = kioskBreakMins(totalMins);
+      const { grossHours, otHours } = hoursWorked(totalMins, breakMins);
 
       await this.prisma.timeEntry.update({
         where: { id: open.id },
         data: {
           clockOut,
-          breakMins:  0,
+          breakMins,
           grossHours: grossHours as any,
           otHours:    otHours as any,
           status:     TimeEntryStatus.CLOSED,

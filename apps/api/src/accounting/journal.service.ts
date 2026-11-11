@@ -846,7 +846,20 @@ export class JournalService {
             if (invoiceType === 'CHARGE') {
               lines.push({ accountId: await getAccount('1030'), credit: total,        description: 'Void - reverse receivable' });
             } else {
-              lines.push({ accountId: await getAccount('1010'), credit: total,        description: 'Void - reverse cash' });
+              // Reverse the tender the way the SALE booked it: non-cash
+              // payments went to 1031 Digital Wallet Receivable, the rest to
+              // 1010. Crediting 1010 for everything took a GCash sale's money
+              // out of the drawer. With no payments on record (old events),
+              // the whole amount stays on cash as before.
+              const voidPayments = ((payload['payments'] ?? origPayload['payments']) as Array<{ method: string; amount: number }> | undefined) ?? [];
+              const tendered     = voidPayments.reduce((s, p) => s + Number(p.amount), 0);
+              const digitalPaid  = voidPayments.filter((p) => p.method !== 'CASH').reduce((s, p) => s + Number(p.amount), 0);
+              const saleBase     = Number(payload['totalAmount'] ?? 0);
+              const digitalShare = tendered > 0 && saleBase > 0 ? Math.min(digitalPaid, saleBase) / saleBase : 0;
+              const digitalBack  = r2(Math.min(total, total * digitalShare));
+              const cashBack     = r2(total - digitalBack);
+              if (cashBack > 0)    lines.push({ accountId: await getAccount('1010'), credit: cashBack,    description: 'Void - reverse cash' });
+              if (digitalBack > 0) lines.push({ accountId: await getAccount('1031'), credit: digitalBack, description: 'Void - reverse digital wallet' });
             }
           }
 

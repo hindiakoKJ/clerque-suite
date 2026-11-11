@@ -40,6 +40,7 @@ export interface CartSnapshot {
   cashierName?:    string;
   branchName?:     string;
   businessName?:   string;
+  paymentMethod?:  'CASH' | 'GCASH' | 'PAYMAYA' | 'CARD' | 'SPLIT';
 }
 
 interface StoredSnapshot extends CartSnapshot {

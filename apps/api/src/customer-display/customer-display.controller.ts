@@ -41,6 +41,10 @@ class PublishSnapshotDto {
   @IsOptional() @IsString() cashierName?:    string;
   @IsOptional() @IsString() branchName?:     string;
   @IsOptional() @IsString() businessName?:   string;
+  /** The tab the cashier picked, so a second-device display shows the right
+   *  prompt ("Scan with GCash") instead of always "Cash". */
+  @IsOptional() @IsIn(['CASH', 'GCASH', 'PAYMAYA', 'CARD', 'SPLIT'])
+  paymentMethod?: CartSnapshot['paymentMethod'];
 
   /**
    * Optional — when omitted, the JWT user.sub is used as the cashier key.

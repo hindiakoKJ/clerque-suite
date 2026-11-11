@@ -724,6 +724,7 @@ model Tenant {
   purchaseRequests           PurchaseRequest[]
   apiKeys                    ApiKey[]
   serviceDrafts              ServiceDraft[]
+  receivingDrafts            ReceivingDraft[]
   voidApprovals              VoidApproval[]
   displayPairings            DisplayPairing[]
   /// Sprint 25 — when > 0, voids/refunds at/above this peso-cent amount
@@ -1004,6 +1005,7 @@ model Branch {
   tankDips                  TankDip[]
   /// Stock saved at each closing: the daily inventory sheet's Beginning.
   stockDayBalances          StockDayBalance[]
+  receivingDrafts           ReceivingDraft[]
 
   @@map("branches")
 }
@@ -6117,6 +6119,55 @@ model ServiceDraft {
 
   @@unique([tenantId, reference])
   @@map("service_drafts")
+}
+
+/// A supplier delivery an API key read from the owner's invoice photo, held
+/// until a person confirms it. Nothing moves while it is a DRAFT: confirming
+/// receives each line through InventoryService.receiveRawMaterial (stock,
+/// lot, weighted-average cost, the journal event and the AP bill, on credit),
+/// exactly as a delivery received on the screen.
+model ReceivingDraft {
+  id                String    @id @default(cuid())
+  tenantId          String
+  branchId          String
+  /// The caller's reference (also in service_drafts).
+  reference         String
+  /// DRAFT | CONFIRMED | CANCELLED. Checked in the API, not an enum, like
+  /// PurchaseRequestLine.sourceKind.
+  status            String    @default("DRAFT")
+  supplierName      String
+  supplierTin       String?
+  /// The tenant's Vendor the supplier matched (by TIN, else by name) when
+  /// the draft was made; confirming creates one from name + TIN when null.
+  vendorId          String?
+  invoiceNumber     String
+  invoiceDate       DateTime
+  dueDate           DateTime?
+  vatable           Boolean
+  subtotal          Decimal   @db.Decimal(14, 2)
+  vat               Decimal   @db.Decimal(14, 2)
+  total             Decimal   @db.Decimal(14, 2)
+  purchaseOrderId   String?
+  /// [{ itemId, kind, qty, uom, unitCost (net of VAT), lineTotal, printed }]
+  lines             Json
+  evidenceFile      String?
+  evidenceSha256    String?
+  /// Audit stamp, not a foreign key: revoking a key keeps the record.
+  createdByApiKeyId String
+  confirmedById     String?
+  confirmedAt       DateTime?
+  /// What confirming did, line by line (posted / duplicate / failed and why).
+  result            Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([tenantId, reference])
+  @@index([tenantId, status])
+  @@index([tenantId, invoiceNumber])
+  @@map("receiving_drafts")
 }
 
 enum VoidApprovalStatus {

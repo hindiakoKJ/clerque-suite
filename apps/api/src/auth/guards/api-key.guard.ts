@@ -7,8 +7,11 @@ import {
 import { Reflector } from '@nestjs/core';
 import { ApiKeyStrategy } from '../strategies/api-key.strategy';
 import type { ApiAccessLevel } from '@repo/shared-types';
+import { assertApiKeyScope, type ApiKeyScope } from '../../api-keys/scopes';
 
 export const API_KEY_MIN_LEVEL = 'apiKeyMinLevel';
+/** The named scope a route requires of an API key (`@RequireApiKeyScope`). */
+export const API_KEY_SCOPE = 'apiKeyScope';
 
 const LEVELS: Record<ApiAccessLevel, number> = { none: 0, read: 1, readwrite: 2 };
 
@@ -44,6 +47,13 @@ export class ApiKeyGuard implements CanActivate {
         });
       }
     }
+    // Scoped keys reach only routes that ask for one of their scopes, and
+    // a scoped route admits only a key holding its scope (scopes.ts).
+    const scope = this.reflector.getAllAndOverride<ApiKeyScope | undefined>(
+      API_KEY_SCOPE,
+      [ctx.getHandler(), ctx.getClass()],
+    );
+    assertApiKeyScope(principal, scope);
     return true;
   }
 }

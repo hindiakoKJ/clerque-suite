@@ -398,6 +398,10 @@ enum AuditAction {
   /// own JE. Intentional ("final authority") but flagged distinctly so
   /// BIR sampling surfaces it cleanly during examination.
   SELF_APPROVAL
+  /// An API key opened a draft (count, purchase request, journal entry)
+  /// through /service. performedBy is "apikey:<key id>"; the label is in
+  /// `after`. A person finishes every such draft.
+  SERVICE_DRAFT_CREATED
 }
 
 enum SessionStatus {
@@ -442,6 +446,7 @@ enum JournalSource {
   AP // posted by the AP module (Phase 4)
   AR // posted by the AR module (Phase 5)
   PAYROLL // posted by the Payroll engine on PayRun lock (Sprint 19)
+  AIBA // drafted by an API key through /service/ledger/drafts/journal; always DRAFT, a person posts it
 }
 
 // ─── Super Admin ──────────────────────────────────────────────────────────────
@@ -718,6 +723,8 @@ model Tenant {
   purchaseOrders             PurchaseOrder[]
   purchaseRequests           PurchaseRequest[]
   apiKeys                    ApiKey[]
+  serviceDrafts              ServiceDraft[]
+  receivingDrafts            ReceivingDraft[]
   voidApprovals              VoidApproval[]
   displayPairings            DisplayPairing[]
   /// Sprint 25 — when > 0, voids/refunds at/above this peso-cent amount
@@ -998,6 +1005,7 @@ model Branch {
   tankDips                  TankDip[]
   /// Stock saved at each closing: the daily inventory sheet's Beginning.
   stockDayBalances          StockDayBalance[]
+  receivingDrafts           ReceivingDraft[]
 
   @@map("branches")
 }
@@ -5174,6 +5182,11 @@ model CycleCountLine {
   /// Computed at post: countedQty - expectedQty (positive = found extra; negative = shrinkage).
   varianceQty   Decimal @default(0) @db.Decimal(12, 3)
   notes         String?
+  /// The user who last entered countedQty on the counts screen. Posting is
+  /// refused to that user (segregation of duties: who counts does not post).
+  /// Null on lines nobody has entered yet, and on lines from before this
+  /// column (no check for those).
+  countedById   String?
 
   count       CycleCount  @relation(fields: [countId], references: [id], onDelete: Cascade)
   rawMaterial RawMaterial @relation(fields: [rawMaterialId], references: [id])
@@ -6068,6 +6081,11 @@ model ApiKey {
   createdById String
   createdAt   DateTime  @default(now())
   expiresAt   DateTime?
+  /// Named scopes for the /service routes (inventory:read, inventory:draft,
+  /// ledger:read, journal:draft; api-keys/scopes.ts). Empty = a key of the
+  /// original kind, judged by accessLevel alone and refused on every scoped
+  /// route. A key with scopes is refused everywhere else.
+  scopes      String[]  @default([])
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -6077,6 +6095,79 @@ model ApiKey {
   /// hashed against every candidate row — latency + a DoS vector.
   @@index([keyPrefix])
   @@map("api_keys")
+}
+
+/// One draft an API key asked for through /service, by the caller's own
+/// reference. The unique (tenantId, reference) is what makes a retry return
+/// the first draft instead of a second one, even when two retries race.
+/// apiKeyId is an audit stamp, not a foreign key: revoking a key must never
+/// erase who drafted what.
+model ServiceDraft {
+  id        String   @id @default(cuid())
+  tenantId  String
+  apiKeyId  String
+  /// The caller's reference, e.g. "AIBA-IN-2026-11-30-01".
+  reference String
+  /// COUNT | PURCHASE_REQUEST | JOURNAL
+  kind      String
+  /// The CycleCount, PurchaseRequest or JournalEntry it made. Null only for
+  /// the moment between claiming the reference and creating the draft.
+  targetId  String?
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, reference])
+  @@map("service_drafts")
+}
+
+/// A supplier delivery an API key read from the owner's invoice photo, held
+/// until a person confirms it. Nothing moves while it is a DRAFT: confirming
+/// receives each line through InventoryService.receiveRawMaterial (stock,
+/// lot, weighted-average cost, the journal event and the AP bill, on credit),
+/// exactly as a delivery received on the screen.
+model ReceivingDraft {
+  id                String    @id @default(cuid())
+  tenantId          String
+  branchId          String
+  /// The caller's reference (also in service_drafts).
+  reference         String
+  /// DRAFT | CONFIRMED | CANCELLED. Checked in the API, not an enum, like
+  /// PurchaseRequestLine.sourceKind.
+  status            String    @default("DRAFT")
+  supplierName      String
+  supplierTin       String?
+  /// The tenant's Vendor the supplier matched (by TIN, else by name) when
+  /// the draft was made; confirming creates one from name + TIN when null.
+  vendorId          String?
+  invoiceNumber     String
+  invoiceDate       DateTime
+  dueDate           DateTime?
+  vatable           Boolean
+  subtotal          Decimal   @db.Decimal(14, 2)
+  vat               Decimal   @db.Decimal(14, 2)
+  total             Decimal   @db.Decimal(14, 2)
+  purchaseOrderId   String?
+  /// [{ itemId, kind, qty, uom, unitCost (net of VAT), lineTotal, printed }]
+  lines             Json
+  evidenceFile      String?
+  evidenceSha256    String?
+  /// Audit stamp, not a foreign key: revoking a key keeps the record.
+  createdByApiKeyId String
+  confirmedById     String?
+  confirmedAt       DateTime?
+  /// What confirming did, line by line (posted / duplicate / failed and why).
+  result            Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([tenantId, reference])
+  @@index([tenantId, status])
+  @@index([tenantId, invoiceNumber])
+  @@map("receiving_drafts")
 }
 
 enum VoidApprovalStatus {

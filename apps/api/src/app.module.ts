@@ -75,6 +75,7 @@ import { VoidApprovalsModule } from './void-approvals/void-approvals.module';
 import { DisplayPairingModule } from './display-pairing/display-pairing.module';
 import { ReportsAdvancedModule } from './reports-advanced/reports-advanced.module';
 import { ApiKeysModule } from './api-keys/api-keys.module';
+import { ServiceApiModule } from './service-api/service-api.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { InventoryReportsModule } from './inventory-reports/inventory-reports.module';
 import { HealthController } from './health/health.controller';
@@ -178,6 +179,7 @@ import { throttleTracker } from './common/http/throttle-tracker';
     DisplayPairingModule,
     ReportsAdvancedModule,
     ApiKeysModule,
+    ServiceApiModule,
     PurchaseOrdersModule,
     InventoryReportsModule,
   ],

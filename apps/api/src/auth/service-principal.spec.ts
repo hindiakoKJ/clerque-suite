@@ -35,7 +35,9 @@ describe('ApiKeyStrategy — service principal', () => {
   const resolved: ResolvedApiKey = {
     tenantId:        'tenant-1',
     keyId:           'key-abc12345',
+    label:           'Bookkeeping app',
     accessLevel:     'readwrite',
+    scopes:          [],
     planCode:        'CLERQUE',
     taxStatus:       'VAT',
     businessName:    'Reyes Bakery',

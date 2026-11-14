@@ -18,6 +18,7 @@ import { api, ApiHttpError } from '@/api/client';
 import { useTenantBranding } from '@/api/queries';
 import TenantMark from '@/components/TenantMark';
 import { clearDeviceMode } from '@/device-mode/storage';
+import { nothingUnsent } from '@/offline/unsent-guard';
 import { colors, radii, spacing, text as textTokens } from '@/theme';
 import type { PhoneMoreStackParamList } from '@/shell/phone/types';
 
@@ -53,6 +54,7 @@ export default function PhoneMoreScreen({ navigation }: Props): React.ReactEleme
           text: 'Continue',
           style: 'destructive',
           onPress: async () => {
+            if (!(await nothingUnsent())) return;
             await clearDeviceMode();
             await signOut();
           },

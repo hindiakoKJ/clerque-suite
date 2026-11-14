@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, Optional, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, NotFoundException, Optional, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -518,7 +518,10 @@ export class ProcureReceiptsService {
       }
     }
 
-    // 0. Shopping already saved as bought on a list goes in from that list, not a second time from here.
+    // 0. The same supplier receipt is not received twice, and shopping
+    //    already saved as bought on a list goes in from that list, not a
+    //    second time from here.
+    await this.refuseSameReceiptTwice(tenantId, dto);
     await this.refuseWhatIsOnABoughtList(tenantId, branchId, dto.lines ?? []);
 
     const receiptDate = this.resolveDate(dto.receiptDate);
@@ -886,6 +889,46 @@ export class ProcureReceiptsService {
   // ── helpers ───────────────────────────────────────────────────────────────
 
   private keyTag(key: string) { return `[RCPT:${key}]`; }
+
+  /** The branch of a request a receipt is landing on, or null if it is not this shop's. */
+  async branchOfRequest(tenantId: string, id: string): Promise<string | null> {
+    const req = await this.prisma.purchaseRequest.findFirst({ where: { id, tenantId }, select: { branchId: true } });
+    return req?.branchId ?? null;
+  }
+
+  /**
+   * A receipt already received under the same store and receipt number.
+   *
+   * The key above stops a retry of one submission. It does not stop the
+   * same OR being sent again as a new submission -- the photo taken twice,
+   * a draft made again from the same paper -- and each would get its own
+   * request, so the stock and the expense would go in twice. The store and
+   * receipt number are kept on the request as its label ("Puregold ·
+   * OR-88231"), so a request that is not cancelled with the same label is
+   * the same receipt. Letters are compared without regard to case.
+   */
+  private async refuseSameReceiptTwice(tenantId: string, dto: ConfirmReceiptDto) {
+    const ref = dto.referenceNumber?.trim();
+    if (!ref) return;
+    const label = [dto.vendor?.trim(), ref].filter(Boolean).join(' · ');
+    const twin = await this.prisma.purchaseRequest.findFirst({
+      where: {
+        tenantId,
+        status: { not: 'CANCELLED' },
+        OR: [
+          { notes: { equals:   label,        mode: 'insensitive' } },
+          { notes: { endsWith: ` ${label}`, mode: 'insensitive' } },
+        ],
+      },
+      select: { requestNumber: true },
+    });
+    if (twin) {
+      throw new ConflictException(
+        `Receipt ${label} is already in (request ${twin.requestNumber}). ` +
+        'If this is a different receipt with the same number, add something to the reference to tell them apart.',
+      );
+    }
+  }
 
   /**
    * A receipt posted on its own, for an ingredient a shopper already saved

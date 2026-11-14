@@ -10,6 +10,7 @@ import { AiQuotaGuard } from '../ai/ai-quota.guard';
 import { ProcureReceiptsService } from './procure-receipts.service';
 import { ParseReceiptDto, ConfirmReceiptDto } from './dto/receipts.dto';
 import { SANITY_HEADER, sanityContext } from '../common/sanity/sanity.types';
+import { effectiveBranchId } from '../common/branch-scope';
 import {
   ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor, ReceiptReadLedger, ReceiptReads, receiptReadsToday,
 } from './receipt-read-limit.guard';
@@ -82,10 +83,17 @@ export class ProcureReceiptsController {
   @Post('confirm')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Post a corrected receipt: receive stock, record expenses, file the photo' })
-  confirm(@CurrentUser() user: JwtPayload, @Body() dto: ConfirmReceiptDto, @Headers(SANITY_HEADER) sanity?: string) {
+  async confirm(@CurrentUser() user: JwtPayload, @Body() dto: ConfirmReceiptDto, @Headers(SANITY_HEADER) sanity?: string) {
     const { sanityConfirmations, ...rest } = dto;
+    // A branch-scoped role posts into its own branch only: the branch it
+    // names, and the request it lands the receipt on.
+    const branchId = effectiveBranchId(user, rest.branchId);
+    if (rest.purchaseRequestId) {
+      const onto = await this.receipts.branchOfRequest(user.tenantId!, rest.purchaseRequestId);
+      if (onto) effectiveBranchId(user, onto);
+    }
     return this.receipts.confirm(
-      user.tenantId!, user.sub, user.branchId ?? undefined, rest as ConfirmReceiptDto,
+      user.tenantId!, user.sub, user.branchId ?? undefined, { ...rest, branchId } as ConfirmReceiptDto,
       sanityContext(sanity, sanityConfirmations, user.sub, user.role),
     );
   }

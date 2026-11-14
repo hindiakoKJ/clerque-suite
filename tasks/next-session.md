@@ -224,6 +224,51 @@ Found by the same map, wrong today with or without MariBank:
   processor for the coming finance and accounting, inventory and payroll AI
   agents.
 
+## Procure and sync before AIBA connects (review 14 Nov)
+
+Read-only review of procure, the offline sync, ingest and the `aiba-service`
+branch. KJ asked for the review while away.
+
+**Fixed on master, 14 Nov:**
+- Counter: signing out, switching device mode or "Not you? Switch cashier"
+  deleted every unsent offline sale. It now refuses while anything is waiting.
+- Ingest (CourtSide, magnetmoments): a refund re-sent while the first was
+  still running, or after its receipt failed to save, posted twice. It now
+  runs under a lock on its key and finds an entry already posted.
+- The same sale arriving twice at once (a till timeout, then the offline
+  queue) was parked as "Needs attention" though it was in the books. Now it
+  answers with the saved order.
+- Procure receipts: the same store + OR number sent as a new submission was
+  received again. Now it is refused, naming the request it is already on.
+- Procure: a branch manager could read, receive or cancel another branch's
+  purchase request by id, and post a receipt into another branch. Now held to
+  their own branch.
+- Daily close summary counts a sale on the day it was paid, not the day it
+  synced.
+
+**Sent to the AIBA session for its branch** (it owns `aiba-service`):
+- VAT shop receiving a non-VAT invoice books stock 12% low (the same gap is in
+  master's `receiveRawMaterial`: it has no "VAT invoice" flag).
+- Receiving drafts: a branch manager can confirm any branch's draft.
+- A draft can stick at POSTING forever.
+- The AP bill can differ from the printed invoice total.
+- Invoice numbers are compared exactly, ignoring case and spacing differences.
+
+**Still open (not done):**
+- PO receive commits the PO quantities before the stock posts; a failed line
+  can never be received. PO receive has no idempotency key or row lock (a
+  double-tap receives twice).
+- No database guard against two receives of the same reference at the same
+  moment: needs a unique index, so a migration on a branch.
+- Procure cannot receive on CREDIT; PO receiving makes one AP bill per line
+  with the PO number, not the supplier invoice number.
+- Ingest refunds never touch the order (not marked refunded; a refund above
+  the sale is accepted).
+- Web: a shared tablet can't send another cashier's queued sales, and those
+  block her drawer close. Counter: a refused queued sale is retried forever.
+- Sale times from devices are taken as sent (no check against a wrong clock).
+- KJ to decide: one person can request, buy and receive (no second person).
+
 ## Tenant isolation safety net (21 Oct)
 
 Every query on a shop table (108 tables with a required tenantId) made during

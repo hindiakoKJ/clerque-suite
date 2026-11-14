@@ -480,6 +480,18 @@ export class ProcureService {
     return req;
   }
 
+  /**
+   * The branch a request belongs to, for the controller to hold a
+   * branch-scoped role to its own branch. Null when there is no such request
+   * in this shop; the route then answers "not found" as it always did.
+   */
+  async branchOf(tenantId: string, id: string): Promise<string | null> {
+    const req = await this.prisma.purchaseRequest.findFirst({
+      where: { id, tenantId }, select: { branchId: true },
+    });
+    return req?.branchId ?? null;
+  }
+
   /** The request as this viewer is allowed to see it. */
   async get(tenantId: string, id: string, viewerRole?: string | null) {
     const [req] = await this.enrich(tenantId, [await this.getRaw(tenantId, id)]);

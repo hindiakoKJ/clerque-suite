@@ -31,7 +31,7 @@ describe('IngestService', () => {
     ...over,
   });
 
-  const build = (opts: { existingReceipt?: any; products?: Array<{ id: string; name: string; sku: string; costPrice: number | null }> } = {}) => {
+  const build = (opts: { postedJournal?: any; existingReceipt?: any; products?: Array<{ id: string; name: string; sku: string; costPrice: number | null }> } = {}) => {
     const created = { id: 'ord-1', orderNumber: 'ORD-2026-000001' };
     const productStore: Array<{ id: string; name: string; sku: string; costPrice: number | null }> = [...(opts.products ?? [])];
     const prisma: any = {
@@ -57,7 +57,10 @@ describe('IngestService', () => {
         }),
       },
       category: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({ id: 'cat-magnets', revenueAccountCode: '4010' }), update: jest.fn() },
+      journalEntry: { findFirst: jest.fn().mockResolvedValue(opts.postedJournal ?? null) },
+      $executeRaw:  jest.fn().mockResolvedValue(1),
     };
+    prisma.$transaction = jest.fn().mockImplementation((fn: any) => fn(prisma));
     const orders  = { create: jest.fn().mockResolvedValue(created) };
     const journal = { create: jest.fn().mockResolvedValue({ id: 'je-1' }) };
     const accounts = {
@@ -136,7 +139,59 @@ describe('IngestService', () => {
     expect(Math.round(credit * 100)).toBe(112000);      // ₱1120 returned
   });
 
-  // ─── magnetmoments.cc (Magnet Books) ─────────────────────────────────────
+  describe('a refund posts once', () => {
+    const refund: CourtSideRefundEvent = {
+      event_type: 'refund', club_ref: 'club', occurred_at: '2026-07-27T09:00:00.000Z',
+      order_ref: 'BK-2026-001', refund_ref: 'RF-1', reason: 'cancellation',
+      totals: { net_centavos: -112000, currency: 'PHP' },
+    };
+
+    it('takes a lock on the refund key and writes the receipt inside it', async () => {
+      const { svc, prisma, journal } = build();
+      const res = await svc.ingest(TENANT, 'key-1', 'branch-1', refund);
+      expect(res.replayed).toBe(false);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(journal.create).toHaveBeenCalledTimes(1);
+      expect(prisma.ingestReceipt.create).toHaveBeenCalledTimes(1);
+      expect(prisma.ingestReceipt.create.mock.calls[0][0].data.idempotencyKey).toBe('refund:RF-1');
+    });
+
+    it('does not post again when the entry is in but its receipt was never saved', async () => {
+      const { svc, prisma, journal } = build({ postedJournal: { id: 'je-9' } });
+      const res = await svc.ingest(TENANT, 'key-1', 'branch-1', refund);
+      expect(journal.create).not.toHaveBeenCalled();
+      expect(res.replayed).toBe(true);
+      expect(prisma.journalEntry.findFirst.mock.calls[0][0].where)
+        .toEqual({ tenantId: TENANT, source: 'SYSTEM', createdBy: 'COURTSIDE', reference: 'RF-1' });
+      expect(prisma.ingestReceipt.create).toHaveBeenCalledTimes(1);   // the receipt is filled in now
+    });
+
+    it('a delivery that waited on the lock finds the receipt of the first and posts nothing', async () => {
+      const { svc, prisma, journal } = build();
+      // Outside the lock: no receipt yet. Inside it: the first delivery has saved one.
+      prisma.ingestReceipt.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ resultJson: { journalPosted: true, amount: 1120 } });
+      const res = await svc.ingest(TENANT, 'key-1', 'branch-1', refund);
+      expect(res).toEqual({ idempotencyKey: 'refund:RF-1', replayed: true, result: { journalPosted: true, amount: 1120 } });
+      expect(journal.create).not.toHaveBeenCalled();
+      expect(prisma.ingestReceipt.create).not.toHaveBeenCalled();
+    });
+
+    it('a magnet refund is held the same way', async () => {
+      const { svc, prisma, journal } = build({ postedJournal: { id: 'je-9' } });
+      await svc.ingestMagnet(TENANT, 'key-1', 'branch-1', {
+        event_type: 'refund', shop_ref: 'shop', occurred_at: '2026-08-02T09:00:00.000Z',
+        order_ref: 'MM-1001', refund_ref: 'MMR-1', reason: 'damaged',
+        totals: { amount_minor: 5000, currency: 'PHP' },
+      } as MagnetRefundEvent);
+      expect(journal.create).not.toHaveBeenCalled();
+      expect(prisma.journalEntry.findFirst.mock.calls[0][0].where.createdBy).toBe('MAGNETMOMENTS');
+    });
+  });
+
+    // ─── magnetmoments.cc (Magnet Books) ─────────────────────────────────────
 
   describe('magnetmoments', () => {
     const magnetSale = (over: Partial<MagnetSaleEvent> = {}): MagnetSaleEvent => ({

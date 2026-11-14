@@ -64,6 +64,13 @@ describe('ProcureReceiptsService', () => {
       purchaseRequest: {
         findFirst: jest.fn().mockImplementation(({ where }: any) => {
           if (where.notes?.startsWith) return Promise.resolve(opts.existingByKey ?? null);
+          if (where.OR) {
+            // The same store and receipt number: the label, alone or after the key tag.
+            const lc = (x: string) => x.toLowerCase();
+            const [eq, ends] = [where.OR[0].notes.equals, where.OR[1].notes.endsWith];
+            return Promise.resolve(requests.find((r) => r.status !== 'CANCELLED' && r.notes
+              && (lc(r.notes) === lc(eq) || lc(r.notes).endsWith(lc(ends)))) ?? null);
+          }
           return Promise.resolve(requests[requests.length - 1] ?? null);
         }),
         create: jest.fn().mockImplementation(({ data }: any) => {
@@ -820,6 +827,33 @@ describe('ProcureReceiptsService', () => {
   });
 
   // ── a receipt on its own, for shopping already saved as bought ─────────────
+
+  describe('the same supplier receipt sent twice', () => {
+    it('refuses the second submission of the same store and receipt number, and posts nothing', async () => {
+      const { svc, received } = build();
+      await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, idempotencyKey: 'k-1' });
+      const once = received.length;
+
+      await expect(svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, idempotencyKey: 'k-2', referenceNumber: 'or 4471' }))
+        .rejects.toThrow('Receipt Puregold · or 4471 is already in (request ');
+      expect(received.length).toBe(once);
+    });
+
+    it('lets the same number through from another store, or a receipt with no number', async () => {
+      const { svc, received } = build();
+      await svc.confirm(TENANT, USER, BRANCH, CONFIRM);
+      await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, vendor: 'SM Hypermarket' });
+      await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, referenceNumber: undefined });
+      expect(received.length).toBe(6);
+    });
+
+    it('a retry under the same key still replays instead of being refused', async () => {
+      const seen = { id: 'req-old', status: 'RECEIVED', notes: '[RCPT:k-1] Puregold · OR 4471', lines: [] };
+      const { svc } = build({ existingByKey: seen });
+      const r = await svc.confirm(TENANT, USER, BRANCH, { ...CONFIRM, idempotencyKey: 'k-1' });
+      expect(r.duplicate).toBe(true);
+    });
+  });
 
   describe('shopping already saved as bought on a list', () => {
     const onList = (over: any = {}, request: any = {}) => ({

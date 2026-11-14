@@ -127,7 +127,7 @@ export class ProcureController {
     @Query('to') to: string,
     @Query('branchId') branchId?: string,
   ) {
-    const out = await this.excel.exportWorkbook(user.tenantId!, { from, to, branchId });
+    const out = await this.excel.exportWorkbook(user.tenantId!, { from, to, branchId: effectiveBranchId(user, branchId) });
     res.set({
       'Content-Type':        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': `attachment; filename="${out.filename}"`,
@@ -173,6 +173,7 @@ export class ProcureController {
     if (copy != null && copy !== 'sent' && copy !== 'booked') {
       throw new BadRequestException('copy is "sent" or "booked".');
     }
+    await this.ownBranch(user, id);
     const out = await this.procure.requestPdf(user.tenantId!, id, copy === 'booked' ? 'booked' : 'sent', user.role);
     res.set({
       'Content-Type':        'application/pdf',
@@ -185,7 +186,8 @@ export class ProcureController {
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Get(':id')
-  get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+  async get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    await this.ownBranch(user, id);
     return this.procure.get(user.tenantId!, id, user.role);
   }
 
@@ -198,7 +200,7 @@ export class ProcureController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Add everything below its reorder level to the open request' })
   async pull(@CurrentUser() user: JwtPayload, @Body() body: { branchId?: string }) {
-    const branchId = await this.procure.resolveBranch(user.tenantId!, body.branchId ?? user.branchId);
+    const branchId = await this.procure.resolveBranch(user.tenantId!, effectiveBranchId(user, body.branchId) ?? user.branchId);
     return this.procure.pullLowStock(user.tenantId!, branchId, user.sub);
   }
 
@@ -206,7 +208,8 @@ export class ProcureController {
   @Post(':id/lines')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Add an ingredient to the request' })
-  addLine(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: AddLineDto) {
+  async addLine(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: AddLineDto) {
+    await this.ownBranch(user, id);
     return this.procure.addLine(user.tenantId!, id, body);
   }
 
@@ -219,23 +222,25 @@ export class ProcureController {
   @Post(':id/lines/:lineId/count')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Record what is left on the shelf for a line, onto a cycle count' })
-  count(
+  async count(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Param('lineId') lineId: string,
     @Body() body: RecordCountDto,
   ) {
+    await this.ownBranch(user, id);
     return this.procure.recordCount(user.tenantId!, id, lineId, user.sub, body.countedQty);
   }
 
   @Roles('CASHIER', 'SALES_LEAD', 'BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM', 'WAREHOUSE_STAFF', 'GENERAL_EMPLOYEE')
   @Delete(':id/lines/:lineId')
   @HttpCode(HttpStatus.OK)
-  removeLine(
+  async removeLine(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Param('lineId') lineId: string,
   ) {
+    await this.ownBranch(user, id);
     return this.procure.removeLine(user.tenantId!, id, lineId);
   }
 
@@ -244,7 +249,8 @@ export class ProcureController {
   @Post(':id/send')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Close the request and send it to the owners' })
-  send(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+  async send(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    await this.ownBranch(user, id);
     return this.procure.sendRequest(user.tenantId!, id, user.sub);
   }
 
@@ -258,12 +264,13 @@ export class ProcureController {
   @Post(':id/bought')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Record the shopping: packs, pack size, price paid' })
-  bought(
+  async bought(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() body: RecordBoughtDto,
     @Headers(SANITY_HEADER) sanity?: string,
   ) {
+    await this.ownBranch(user, id);
     return this.procure.recordBought(
       user.tenantId!, id, body.lines ?? [],
       { userId: user.sub, role: user.role },
@@ -279,7 +286,8 @@ export class ProcureController {
   @Post(':id/photo')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Attach a photo of the receipt, order screen or delivery slip' })
-  photo(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: AttachPhotoDto) {
+  async photo(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() body: AttachPhotoDto) {
+    await this.ownBranch(user, id);
     return this.procure.attachPhoto(user.tenantId!, id, user.sub, body);
   }
 
@@ -297,7 +305,7 @@ export class ProcureController {
   @Post(':id/receive')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Post what arrived to stock' })
-  receive(
+  async receive(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() body: ReceiveRequestDto,
@@ -307,6 +315,7 @@ export class ProcureController {
       order-of-magnitude guard left the request at BOUGHT with no way past the
       guard except the receipts screen, and a hand-typed request never had one.
     */
+    await this.ownBranch(user, id);
     return this.procure.receiveRequest(user.tenantId!, id, user.sub, body.paymentMethod ?? 'CASH', {
       ...(body.acceptCostChange === true ? { acceptCostChangeAll: true } : {}),
       receivedAt: body.receivedAt,
@@ -321,7 +330,18 @@ export class ProcureController {
   @Roles('BRANCH_MANAGER', 'BUSINESS_OWNER', 'MDM')
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
-  cancel(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+  async cancel(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    await this.ownBranch(user, id);
     return this.procure.cancel(user.tenantId!, id);
+  }
+
+  /**
+   * A branch-scoped role (a branch manager, a cashier, the kitchen) works on
+   * its own branch's requests only, the same as the list it is shown. A
+   * request id from another branch of the shop is refused, not acted on.
+   */
+  private async ownBranch(user: JwtPayload, id: string): Promise<void> {
+    const branchId = await this.procure.branchOf(user.tenantId!, id);
+    if (branchId) effectiveBranchId(user, branchId);
   }
 }

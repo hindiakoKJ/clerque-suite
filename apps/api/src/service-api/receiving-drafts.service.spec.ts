@@ -25,14 +25,20 @@ describe('ReceivingDraftsService', () => {
     ...over,
   });
 
-  function build(opts: { draft?: any; bills?: any[]; vendor?: any; receive?: jest.Mock } = {}) {
+  function build(opts: { draft?: any; bills?: any[]; vendor?: any; receive?: jest.Mock; taxStatus?: string } = {}) {
     const row = opts.draft === undefined ? draftRow() : opts.draft;
+    // The claim: status DRAFT, or (OR) a POSTING row last touched before the stale line.
+    const claimable = (where: any) => row && (where.status
+      ? where.status === row.status
+      : where.OR.some((c: any) => c.status === row.status && (!c.updatedAt || (row.updatedAt ?? new Date()) < c.updatedAt.lt)));
     const prisma: any = {
+      tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus: opts.taxStatus ?? 'VAT' }) },
       receivingDraft: {
-        findFirst: jest.fn(({ where }: any) => Promise.resolve(row && where.tenantId === row.tenantId && where.id === row.id ? { ...row } : null)),
+        findFirst: jest.fn(({ where }: any) => Promise.resolve(
+          row && where.tenantId === row.tenantId && where.id === row.id && (!where.branchId || where.branchId === row.branchId) ? { ...row } : null)),
         findMany: jest.fn().mockResolvedValue([]),
         updateMany: jest.fn(({ where, data }: any) => {
-          if (row && where.status === row.status) { row.status = data.status; return Promise.resolve({ count: 1 }); }
+          if (claimable(where)) { row.status = data.status; return Promise.resolve({ count: 1 }); }
           return Promise.resolve({ count: 0 });
         }),
         update: jest.fn(({ data }: any) => { Object.assign(row, data); return Promise.resolve({ ...row }); }),
@@ -111,6 +117,45 @@ describe('ReceivingDraftsService', () => {
     await svc.confirm(T, 'rd1', 'u_owner');
     expect(prisma.vendor.create).toHaveBeenCalledWith(expect.objectContaining({ data: { tenantId: T, name: 'Dairy Co', tin: '123-456-789-000' } }));
     expect(receive.mock.calls[0][2].vendorId).toBe('v_new');
+    // kept on the draft: a confirm again uses this supplier, never a second new one
+    expect(prisma.receivingDraft.update).toHaveBeenCalledWith({ where: { id: 'rd1' }, data: { vendorId: 'v_new' } });
+  });
+
+  it("a VAT-registered shop does not take in a non-VAT supplier's invoice here (it would book input VAT that does not exist); a non-VAT shop does", async () => {
+    const plain = () => draftRow({ vatable: false, vat: new Prisma.Decimal('0'), total: new Prisma.Decimal('2133.57') });
+    const vatShop = build({ draft: plain() });
+    await expect(vatShop.svc.confirm(T, 'rd1', 'u_owner')).rejects.toThrow(/VAT-registered/);
+    expect(vatShop.receive).not.toHaveBeenCalled();
+    expect(vatShop.row.status).toBe('DRAFT');
+    const plainShop = build({ draft: plain(), taxStatus: 'NON_VAT' });
+    await expect(plainShop.svc.confirm(T, 'rd1', 'u_owner')).resolves.toMatchObject({ status: 'CONFIRMED' });
+    expect(plainShop.receive.mock.calls[0][2].costPrice).toBe(85.5655);
+  });
+
+  it("a branch manager sees and acts on their own branch's deliveries only", async () => {
+    const { svc, receive, prisma } = build();
+    await expect(svc.confirm(T, 'rd1', 'u_mgr_b2', { branchId: 'b2' })).rejects.toThrow(NotFoundException);
+    await expect(svc.cancel(T, 'rd1', 'b2')).rejects.toThrow(NotFoundException);
+    await expect(svc.getNamed(T, 'rd1', 'b2')).rejects.toThrow(NotFoundException);
+    expect(receive).not.toHaveBeenCalled();
+    await svc.list(T, 'DRAFT', 'b2');
+    expect(prisma.receivingDraft.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: T, branchId: 'b2' });
+    await expect(svc.confirm(T, 'rd1', 'u_mgr_b1', { branchId: 'b1' })).resolves.toMatchObject({ status: 'CONFIRMED' });
+  });
+
+  it('a confirm that died long ago (POSTING for over ten minutes) is taken over; lines already in are not received twice', async () => {
+    const receive = jest.fn().mockResolvedValueOnce({ duplicate: true }).mockResolvedValueOnce({ quantityAfter: 2000 });
+    const { svc, row } = build({
+      draft: draftRow({ status: 'POSTING', updatedAt: new Date(Date.now() - 11 * 60 * 1000) }),
+      // its first line is in already: the duplicate check would refuse a first try
+      bills: [{ vendorBillRef: 'SI-1042', billNumber: 'BILL-000031' }], receive,
+    });
+    const r = await svc.confirm(T, 'rd1', 'u_owner');
+    expect(r.status).toBe('CONFIRMED');
+    expect(r.lines.map((l: any) => l.outcome)).toEqual(['ALREADY_POSTED', 'POSTED']);
+    expect(row.status).toBe('CONFIRMED');
+    const fresh = build({ draft: draftRow({ status: 'POSTING', updatedAt: new Date() }) });
+    await expect(fresh.svc.confirm(T, 'rd1', 'u_owner')).rejects.toThrow(ConflictException);
   });
 
   it('a machine never confirms', async () => {
@@ -144,7 +189,8 @@ describe('ReceivingDraftsService', () => {
     prisma.rawMaterial = { findMany: jest.fn().mockResolvedValue([{ id: 'rm_1', name: 'Fresh milk', unit: 'L' }]) };
     prisma.branch = { findMany: jest.fn().mockResolvedValue([{ id: 'b1', name: 'Main' }]) };
     const [d] = await svc.list(T, 'DRAFT');
-    expect(prisma.receivingDraft.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: T, status: 'DRAFT' } }));
+    // "To confirm" includes a draft caught mid-confirm, so a stuck one stays in sight
+    expect(prisma.receivingDraft.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: T, status: { in: ['DRAFT', 'POSTING'] } } }));
     expect(prisma.rawMaterial.findMany.mock.calls[0][0].where).toEqual({ tenantId: T, id: { in: ['rm_1', 'rm_2'] } });
     expect(prisma.branch.findMany.mock.calls[0][0].where).toEqual({ tenantId: T, id: { in: ['b1'] } });
     expect(d.branchName).toBe('Main');

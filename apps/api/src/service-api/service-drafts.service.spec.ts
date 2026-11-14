@@ -30,6 +30,7 @@ function build(opts: {
   lots?: any[];
   receivingDrafts?: any[];
   po?: any;
+  taxStatus?: string;
 } = {}) {
   const drafts = new Map<string, any>();      // reference -> service_drafts row
   const audit: any[] = [];
@@ -52,6 +53,7 @@ function build(opts: {
     },
   };
   const prisma: any = {
+    tenant: { findUnique: jest.fn().mockResolvedValue({ taxStatus: opts.taxStatus ?? 'VAT' }) },
     serviceDraft: {
       findUnique: jest.fn(({ where }: any) => Promise.resolve(drafts.get(where.tenantId_reference.reference) ?? null)),
       create: jest.fn(({ data }: any) => {
@@ -368,10 +370,22 @@ describe('draft receiving', () => {
     const { svc } = build();
     const badTotal = body(); badTotal.invoice.total = '2300.01';
     await expect(svc.draftReceiving(caller, badTotal)).rejects.toThrow(/is not the total/);
-    const badLine = body(); badLine.lines[0].lineTotal = '2000.00'; badLine.invoice.subtotal = '2000.00'; badLine.invoice.total = '2246.43';
+    const badLine = body(); badLine.lines[0].lineTotal = '2000.00'; badLine.invoice.subtotal = '2000.00'; badLine.invoice.vat = '240.00'; badLine.invoice.total = '2240.00';
     await expect(svc.draftReceiving(caller, badLine)).rejects.toThrow(/is not the line total/);
     const badUnit = body(); badUnit.lines[0].uom = 'ml';
     await expect(svc.draftReceiving(caller, badUnit)).rejects.toThrow(/kept in L/);
+  });
+
+  it('refuses a vatable invoice whose VAT is not 12% of its subtotal (exempt or zero-rated lines): confirming would not add up to it', async () => {
+    const { svc } = build({ vendors: [vendor] });
+    const mixed = body(); mixed.invoice.vat = '200.00'; mixed.invoice.total = '2253.57';
+    await expect(svc.draftReceiving(caller, mixed)).rejects.toThrow(/is not 12% of the subtotal/);
+  });
+
+  it("refuses a non-VAT invoice in a VAT-registered shop (receiving would book input VAT it does not have); a non-VAT shop takes it", async () => {
+    const plain = () => { const b = body(); b.invoice.vatable = false; b.invoice.vat = '0'; b.invoice.subtotal = '2053.57'; b.invoice.total = '2053.57'; return b; };
+    await expect(build({ vendors: [vendor] }).svc.draftReceiving(caller, plain())).rejects.toThrow(/VAT-registered/);
+    await expect(build({ vendors: [vendor], taxStatus: 'NON_VAT' }).svc.draftReceiving(caller, plain())).resolves.toMatchObject({ status: 'DRAFT' });
   });
 
   it("refuses another tenant's branch or item", async () => {

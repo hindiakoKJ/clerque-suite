@@ -7,6 +7,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtPayload } from '@repo/shared-types';
+import { effectiveBranchId } from '../common/branch-scope';
 import { ReceivingDraftsService } from './receiving-drafts.service';
 
 /**
@@ -16,7 +17,8 @@ import { ReceivingDraftsService } from './receiving-drafts.service';
  * confirm or discard one.
  *
  * Owner and branch manager: confirming receives stock at a cost and files a
- * supplier bill, so it stays with the people who see purchase costs.
+ * supplier bill, so it stays with the people who see purchase costs. A branch
+ * manager sees and acts on their own branch's deliveries only.
  */
 @ApiTags('Receiving drafts')
 @ApiBearerAuth('access-token')
@@ -28,12 +30,12 @@ export class ReceivingDraftsController {
 
   @Get()
   list(@CurrentUser() user: JwtPayload, @Query('status') status?: string) {
-    return this.svc.list(user.tenantId!, status);
+    return this.svc.list(user.tenantId!, status, effectiveBranchId(user));
   }
 
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.svc.getNamed(user.tenantId!, id);
+    return this.svc.getNamed(user.tenantId!, id, effectiveBranchId(user));
   }
 
   /** One tap: receive every line and file the bill, through Clerque's own receiving. */
@@ -44,12 +46,15 @@ export class ReceivingDraftsController {
     @Param('id') id: string,
     @Body() body?: { acceptCostChange?: boolean },
   ) {
-    return this.svc.confirm(user.tenantId!, id, user.sub, { acceptCostChange: body?.acceptCostChange === true });
+    return this.svc.confirm(user.tenantId!, id, user.sub, {
+      acceptCostChange: body?.acceptCostChange === true,
+      branchId:         effectiveBranchId(user),
+    });
   }
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
   cancel(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.svc.cancel(user.tenantId!, id);
+    return this.svc.cancel(user.tenantId!, id, effectiveBranchId(user));
   }
 }

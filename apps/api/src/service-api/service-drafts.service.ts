@@ -336,6 +336,24 @@ export class ServiceDraftsService {
       throw new BadRequestException(`invoice.subtotal ${money2(subtotal)} plus vat ${money2(vat)} is not the total ${money2(total)}.`);
     }
     if (!vatable && !vat.isZero()) throw new BadRequestException('A non-VAT invoice carries no VAT.');
+    /*
+      Confirming grosses every line up by 12% and receiving takes 12% back out,
+      so a vatable invoice must carry 12% of its subtotal as VAT (to the peso):
+      an invoice with exempt or zero-rated lines would file bills that do not
+      add up to it, and is refused here for a person to record by hand.
+    */
+    if (vatable && vat.minus(subtotal.times('0.12')).abs().greaterThan('1.00')) {
+      throw new BadRequestException(
+        `invoice.vat ${money2(vat)} is not 12% of the subtotal ${money2(subtotal)}: an invoice with exempt or zero-rated lines is recorded by hand.`,
+      );
+    }
+    // VAT follows the shop at receiving (see ReceivingDraftsService.confirm): a VAT shop cannot take in a non-VAT invoice here yet.
+    if (!vatable) {
+      const shop = await this.prisma.tenant.findUnique({ where: { id: caller.tenantId }, select: { taxStatus: true } });
+      if (shop?.taxStatus === 'VAT') {
+        throw new BadRequestException('This shop is VAT-registered and the invoice has no VAT: receiving would book input VAT that does not exist. Record it by hand.');
+      }
+    }
 
     const lines: ReceivingLine[] = this.lines(body?.lines, 100).map((l, i) => {
       const at = `lines[${i}]`;

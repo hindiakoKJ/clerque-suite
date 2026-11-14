@@ -8,6 +8,16 @@ import { isApiKeyActor } from '../auth/strategies/api-key.strategy';
 import { chargedUnitCost, findDuplicateInvoice, matchVendor, ReceivingLine } from './receiving-rules';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * A confirm that died half way (the process restarted, the last update failed)
+ * leaves the draft POSTING. After this long a new confirm may take it again:
+ * every line is received under the invoice number, so lines already in come
+ * back as already posted and nothing is received twice.
+ */
+export const STALE_POSTING_MS = 10 * 60 * 1000;
+
+/** Only this branch's drafts, when the person is tied to one branch (common/branch-scope.ts). */
+const inBranch = (branchId?: string) => (branchId ? { branchId } : {});
 
 export type LineOutcome =
   | { itemId: string; outcome: 'POSTED'; quantityAfter: number }
@@ -45,25 +55,27 @@ export class ReceivingDraftsService {
    * name and, per line, the Clerque item it was matched to (itemName), so the
    * person checks the match before confirming.
    */
-  async list(tenantId: string, status?: string) {
+  async list(tenantId: string, status?: string, branchId?: string) {
     const wanted = status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status) ? status : undefined;
+    // "To confirm" includes one caught mid-confirm, so a stuck draft is never out of sight.
+    const statusWhere = wanted === 'DRAFT' ? { status: { in: ['DRAFT', 'POSTING'] } } : wanted ? { status: wanted } : {};
     const rows = await this.prisma.receivingDraft.findMany({
-      where:   { tenantId, ...(wanted ? { status: wanted } : {}) },
+      where:   { tenantId, ...inBranch(branchId), ...statusWhere },
       orderBy: { createdAt: 'desc' },
       take:    100,
     });
     return this.withNames(tenantId, rows);
   }
 
-  async get(tenantId: string, id: string) {
-    const d = await this.prisma.receivingDraft.findFirst({ where: { id, tenantId } });
+  async get(tenantId: string, id: string, branchId?: string) {
+    const d = await this.prisma.receivingDraft.findFirst({ where: { id, tenantId, ...inBranch(branchId) } });
     if (!d) throw new NotFoundException('Receiving draft not found.');
     return d;
   }
 
   /** One draft as the screen shows it (branch and item names added). */
-  async getNamed(tenantId: string, id: string) {
-    const [named] = await this.withNames(tenantId, [await this.get(tenantId, id)]);
+  async getNamed(tenantId: string, id: string, branchId?: string) {
+    const [named] = await this.withNames(tenantId, [await this.get(tenantId, id, branchId)]);
     return named;
   }
 
@@ -88,18 +100,40 @@ export class ReceivingDraftsService {
     }));
   }
 
-  async confirm(tenantId: string, id: string, userId: string, opts: { acceptCostChange?: boolean } = {}) {
+  async confirm(tenantId: string, id: string, userId: string, opts: { acceptCostChange?: boolean; branchId?: string } = {}) {
     // A machine drafts; only a person signed in to Clerque confirms.
     if (!userId || isApiKeyActor(userId)) {
       throw new ForbiddenException('A receiving draft is confirmed by a person signed in to Clerque.');
     }
-    const draft = await this.get(tenantId, id);
+    const draft = await this.get(tenantId, id, opts.branchId);
     if (draft.status === 'CONFIRMED') throw new BadRequestException('This delivery is already received.');
     if (draft.status === 'CANCELLED') throw new BadRequestException('This draft was discarded.');
 
-    // One confirm at a time: two taps must not receive the lines twice.
+    /*
+      VAT follows the shop, not the invoice: receiveRawMaterial takes 12% input
+      VAT out of the cost for every VAT-registered shop receiving on credit. A
+      non-VAT supplier's invoice there would book stock 12% low and claim VAT
+      that does not exist, so it is refused until receiving can be told "no
+      input VAT" (the same gap as receiving on the screen).
+    */
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { taxStatus: true } });
+    if (tenant?.taxStatus === 'VAT' && !draft.vatable) {
+      throw new BadRequestException(
+        "This supplier's invoice has no VAT, and this shop is VAT-registered: receiving it here would book input VAT "
+        + 'the invoice does not have. Discard the draft and record the delivery by hand.',
+      );
+    }
+
+    // One confirm at a time: two taps must not receive the lines twice. A
+    // confirm that died long ago may be taken over (STALE_POSTING_MS).
     const claimed = await this.prisma.receivingDraft.updateMany({
-      where: { id, tenantId, status: 'DRAFT' },
+      where: {
+        id, tenantId,
+        OR: [
+          { status: 'DRAFT' },
+          { status: 'POSTING', updatedAt: { lt: new Date(Date.now() - STALE_POSTING_MS) } },
+        ],
+      },
       data:  { status: 'POSTING' },
     });
     if (claimed.count === 0) throw new ConflictException('This draft is being received right now.');
@@ -107,7 +141,8 @@ export class ReceivingDraftsService {
     const outcomes: LineOutcome[] = [];
     try {
       const lines = draft.lines as unknown as ReceivingLine[];
-      const firstTry = draft.result == null;
+      // A take-over of a confirm that died is not a first try: its lines may be in already.
+      const firstTry = draft.result == null && draft.status === 'DRAFT';
 
       // Received since it was drafted (on the screen, or another draft)?
       // Asked again only before anything of this draft is in.
@@ -124,10 +159,17 @@ export class ReceivingDraftsService {
         if (dup) throw new ConflictException(dup);
       }
       // A supplier new to the shop is added from the invoice, so the bill has someone to be owed to.
-      const vendorId = vendor?.id ?? (await this.prisma.vendor.create({
-        data:   { tenantId, name: draft.supplierName, tin: draft.supplierTin ?? null },
-        select: { id: true },
-      })).id;
+      let vendorId = vendor?.id;
+      if (!vendorId) {
+        vendorId = (await this.prisma.vendor.create({
+          data:   { tenantId, name: draft.supplierName, tin: draft.supplierTin ?? null },
+          select: { id: true },
+        })).id;
+      }
+      // Kept on the draft, so a confirm again uses the same supplier and never makes a second one.
+      if (draft.vendorId !== vendorId) {
+        await this.prisma.receivingDraft.update({ where: { id }, data: { vendorId } });
+      }
 
       const poItems = draft.purchaseOrderId
         ? await this.prisma.purchaseOrderItem.findMany({
@@ -185,8 +227,8 @@ export class ReceivingDraftsService {
   }
 
   /** Discard a draft nothing of which has been received. */
-  async cancel(tenantId: string, id: string) {
-    const draft = await this.get(tenantId, id);
+  async cancel(tenantId: string, id: string, branchId?: string) {
+    const draft = await this.get(tenantId, id, branchId);
     const anyIn = ((draft.result ?? []) as unknown as LineOutcome[]).some((o) => o.outcome !== 'FAILED');
     if (draft.status !== 'DRAFT' || anyIn) {
       throw new BadRequestException('Only a draft nothing of which is received can be discarded.');

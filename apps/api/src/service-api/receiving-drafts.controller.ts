@@ -33,7 +33,7 @@ export class ReceivingDraftsController {
 
   @Get(':id')
   get(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.svc.get(user.tenantId!, id);
+    return this.svc.getNamed(user.tenantId!, id);
   }
 
   /** One tap: receive every line and file the bill, through Clerque's own receiving. */

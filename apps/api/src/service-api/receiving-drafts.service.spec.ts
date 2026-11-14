@@ -137,4 +137,18 @@ describe('ReceivingDraftsService', () => {
     await expect(build({ draft: draftRow({ result: [{ itemId: 'rm_1', outcome: 'POSTED' }] }) }).svc.cancel(T, 'rd1')).rejects.toThrow(BadRequestException);
     await expect(build().svc.cancel(T, 'rd1')).resolves.toEqual({ id: 'rd1', status: 'CANCELLED' });
   });
+
+  it('the Deliveries screen gets the branch and the matched item names, read inside the tenant only', async () => {
+    const { svc, prisma } = build();
+    prisma.receivingDraft.findMany.mockResolvedValue([draftRow()]);
+    prisma.rawMaterial = { findMany: jest.fn().mockResolvedValue([{ id: 'rm_1', name: 'Fresh milk', unit: 'L' }]) };
+    prisma.branch = { findMany: jest.fn().mockResolvedValue([{ id: 'b1', name: 'Main' }]) };
+    const [d] = await svc.list(T, 'DRAFT');
+    expect(prisma.receivingDraft.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: T, status: 'DRAFT' } }));
+    expect(prisma.rawMaterial.findMany.mock.calls[0][0].where).toEqual({ tenantId: T, id: { in: ['rm_1', 'rm_2'] } });
+    expect(prisma.branch.findMany.mock.calls[0][0].where).toEqual({ tenantId: T, id: { in: ['b1'] } });
+    expect(d.branchName).toBe('Main');
+    expect(d.lines.map((l: any) => l.itemName)).toEqual(['Fresh milk', null]);
+    expect(await build().svc.list(T)).toEqual([]);
+  });
 });

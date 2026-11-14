@@ -40,19 +40,52 @@ export class ReceivingDraftsService {
     private readonly inventory: InventoryService,
   ) {}
 
-  list(tenantId: string, status?: string) {
+  /**
+   * The drafts for the Deliveries screen, newest first, each with the branch
+   * name and, per line, the Clerque item it was matched to (itemName), so the
+   * person checks the match before confirming.
+   */
+  async list(tenantId: string, status?: string) {
     const wanted = status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status) ? status : undefined;
-    return this.prisma.receivingDraft.findMany({
+    const rows = await this.prisma.receivingDraft.findMany({
       where:   { tenantId, ...(wanted ? { status: wanted } : {}) },
       orderBy: { createdAt: 'desc' },
       take:    100,
     });
+    return this.withNames(tenantId, rows);
   }
 
   async get(tenantId: string, id: string) {
     const d = await this.prisma.receivingDraft.findFirst({ where: { id, tenantId } });
     if (!d) throw new NotFoundException('Receiving draft not found.');
     return d;
+  }
+
+  /** One draft as the screen shows it (branch and item names added). */
+  async getNamed(tenantId: string, id: string) {
+    const [named] = await this.withNames(tenantId, [await this.get(tenantId, id)]);
+    return named;
+  }
+
+  private async withNames<T extends { branchId: string; lines: unknown }>(tenantId: string, rows: T[]) {
+    if (!rows.length) return [];
+    const itemIds = [...new Set(rows.flatMap((r) => ((r.lines ?? []) as ReceivingLine[]).map((l) => l.itemId)))];
+    const branchIds = [...new Set(rows.map((r) => r.branchId))];
+    const [items, branches] = await Promise.all([
+      this.prisma.rawMaterial.findMany({ where: { tenantId, id: { in: itemIds } }, select: { id: true, name: true, unit: true } }),
+      this.prisma.branch.findMany({ where: { tenantId, id: { in: branchIds } }, select: { id: true, name: true } }),
+    ]);
+    const item = new Map(items.map((i) => [i.id, i]));
+    const branch = new Map(branches.map((b) => [b.id, b.name]));
+    return rows.map((r) => ({
+      ...r,
+      branchName: branch.get(r.branchId) ?? null,
+      lines: ((r.lines ?? []) as ReceivingLine[]).map((l) => ({
+        ...l,
+        itemName: item.get(l.itemId)?.name ?? null,
+        itemUnit: item.get(l.itemId)?.unit ?? null,
+      })),
+    }));
   }
 
   async confirm(tenantId: string, id: string, userId: string, opts: { acceptCostChange?: boolean } = {}) {

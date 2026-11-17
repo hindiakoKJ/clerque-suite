@@ -17,7 +17,7 @@ import { jwtDecode } from 'jwt-decode';
 import { api, ApiHttpError } from '@/api/client';
 import type { AuthSession, TenantConfig } from '@/types';
 import { useCartStore } from '@/terminal/cartStore';
-import { clearOutbox } from '@/offline/db';
+import { nothingUnsent } from '@/offline/unsent-guard';
 
 /**
  * Sprint 25 — derive AuthSession.user + TenantConfig from the JWT payload.
@@ -112,7 +112,8 @@ interface AuthContextValue {
   tenant: TenantConfig | null;
   cashier: CashierState | null;
   signIn: (args: SignInArgs) => Promise<void>;
-  signOut: () => Promise<void>;
+  /** Signs out unless sales are still waiting to be sent. Returns whether it signed out. */
+  signOut: () => Promise<boolean>;
   /** Clears cashier-level session but keeps tenant signed in. */
   lockToPin: () => void;
   verifyCashierPin: (pin: string) => Promise<void>;
@@ -266,16 +267,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     ]);
   }, []);
 
-  const signOut = useCallback(async () => {
+  const signOut = useCallback(async (): Promise<boolean> => {
+    // Unsent sales live only on this device. Never sign out over them.
+    if (!(await nothingUnsent())) return false;
     api.setAuthToken(null);
     api.setRefreshToken(null);
     setSession(null);
     setTenant(null);
     setCashier(null);
-    // Drop in-memory cart + on-disk outbox so the next sign-in starts clean.
+    // Drop the in-memory cart so the next sign-in starts clean. The outbox
+    // is empty here (checked above), so nothing unsent is lost.
     try { useCartStore.getState().clear(); } catch { /* zustand store always exists */ }
-    try { await clearOutbox(); } catch { /* sqlite may be uninitialized in tests */ }
     await clearAllPersisted();
+    return true;
   }, []);
 
   const lockToPin = useCallback(() => {

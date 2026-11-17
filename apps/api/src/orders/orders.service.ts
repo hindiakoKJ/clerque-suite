@@ -146,6 +146,15 @@ export class OrdersService {
 
   // ─── Create order (online or from offline sync) ─────────────────────────
 
+  /**
+   * Record a sale, once. The same sale can arrive twice at the same moment:
+   * the till's request times out while the server is still saving, the till
+   * queues it offline, and the queue sends it while the first save is still
+   * running. Both miss the "already in?" check, and the second insert hits
+   * the unique key on clientUuid (or externalRef) and rolls back. That sale
+   * IS in the books, so the second caller gets the saved order back instead
+   * of an error that would park the sale as "Needs attention".
+   */
   async create(
     tenantId: string,
     /**
@@ -153,6 +162,36 @@ export class OrdersService {
      * there is no user behind it, and the sale is attributed via
      * `opts.createdByApiKeyId` instead.
      */
+    cashierId: string | null,
+    payload: OfflineOrder,
+    opts: CreateOrderOptions = {},
+  ) {
+    try {
+      return await this.createOrder(tenantId, cashierId, payload, opts);
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const saved = await this.savedTwin(tenantId, payload.clientUuid ?? null, opts.externalRef ?? null);
+        if (saved) return saved;
+      }
+      throw err;
+    }
+  }
+
+  /** The order already saved under this sale's own keys, in this shop. */
+  private async savedTwin(tenantId: string, clientUuid: string | null, externalRef: string | null) {
+    if (clientUuid) {
+      const byUuid = await this.prisma.order.findFirst({ where: { clientUuid, tenantId } });
+      if (byUuid) return byUuid;
+    }
+    if (externalRef) {
+      const byRef = await this.prisma.order.findFirst({ where: { externalRef, tenantId } });
+      if (byRef) return byRef;
+    }
+    return null;
+  }
+
+  private async createOrder(
+    tenantId: string,
     cashierId: string | null,
     payload: OfflineOrder,
     opts: CreateOrderOptions = {},

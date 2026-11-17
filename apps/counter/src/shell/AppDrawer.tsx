@@ -31,6 +31,7 @@ import FleetScreen from '@/terminal/laundry/FleetScreen';
 import TerminalRouter from '@/terminal/TerminalRouter';
 import ShiftCoordinator from '@/shift/ShiftCoordinator';
 import { clearDeviceMode } from '@/device-mode/storage';
+import { nothingUnsent } from '@/offline/unsent-guard';
 import { colors, radii, spacing, text } from '@/theme';
 
 export type AppDrawerParamList = {
@@ -196,7 +197,7 @@ function DrawerBody(props: DrawerContentComponentProps): React.ReactElement {
           <Text style={styles.footBtnLabel}>Switch cashier</Text>
         </Pressable>
         <Pressable
-          onPress={async () => { await clearDeviceMode(); await signOut(); }}
+          onPress={async () => { if (!(await nothingUnsent())) return; await clearDeviceMode(); await signOut(); }}
           style={styles.footBtn}
         >
           <Text style={styles.footBtnLabel}>Change device mode</Text>

@@ -86,15 +86,6 @@ export async function markOutboxFailure(id: number, error: string): Promise<void
 }
 
 /**
- * Drop every pending outbox row. Used on sign-out so a different operator
- * doesn't inherit the previous session's unsent mutations.
- */
-export async function clearOutbox(): Promise<void> {
-  const db = await getDb();
-  await db.runAsync('DELETE FROM sync_outbox');
-}
-
-/**
  * One-shot cleanup for outbox rows from earlier app versions that the
  * current dispatcher can never drain. Currently:
  *   - `shift.open` (v1-v4) had no handler — every row sat in the queue

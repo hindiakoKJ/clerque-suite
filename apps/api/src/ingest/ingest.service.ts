@@ -79,9 +79,11 @@ export class IngestService {
       return { idempotencyKey, replayed: true, result: existing.resultJson };
     }
 
-    const result = event.event_type === 'sale'
-      ? await this.handleSale(tenantId, apiKeyId, branchId, event)
-      : await this.handleRefund(tenantId, event);
+    if (event.event_type === 'refund') {
+      return this.refundOnce(tenantId, idempotencyKey, 'courtside', 'COURTSIDE', event.refund_ref,
+        () => this.handleRefund(tenantId, event));
+    }
+    const result = await this.handleSale(tenantId, apiKeyId, branchId, event);
 
     // Record the receipt. If a concurrent delivery beat us to it, the unique
     // constraint fires — re-read and return that result (still a no-op net).
@@ -107,6 +109,54 @@ export class IngestService {
     }
 
     return { idempotencyKey, replayed: false, result };
+  }
+
+  /**
+   * A refund posts a journal entry and nothing else, so the receipt alone
+   * cannot stop a second posting: two deliveries arriving together both miss
+   * the receipt, and a receipt that failed to save after the entry posted is
+   * missed by the next re-send. So a refund is taken under a lock on its key,
+   * the receipt is checked again inside it, an entry already posted for this
+   * refund is found by its reference instead of posting another, and the
+   * receipt is written before the lock lets go.
+   */
+  private async refundOnce(
+    tenantId:       string,
+    idempotencyKey: string,
+    source:         'courtside' | 'magnetmoments',
+    poster:         'COURTSIDE' | 'MAGNETMOMENTS',
+    refundRef:      string,
+    post:           () => Promise<{ journalPosted: boolean; amount: number }>,
+  ): Promise<{ idempotencyKey: string; replayed: boolean; result: unknown }> {
+    return this.prisma.$transaction(async (tx) => {
+      const lockKey = `ingest:${tenantId}:${idempotencyKey}`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+
+      const receipt = await tx.ingestReceipt.findUnique({
+        where: { tenantId_idempotencyKey: { tenantId, idempotencyKey } },
+      });
+      if (receipt) return { idempotencyKey, replayed: true, result: receipt.resultJson };
+
+      const posted = await tx.journalEntry.findFirst({
+        where:  { tenantId, source: 'SYSTEM', createdBy: poster, reference: refundRef },
+        select: { id: true },
+      });
+      const result = posted
+        ? { journalPosted: true, alreadyPosted: true, journalEntryId: posted.id }
+        : await post();
+
+      await tx.ingestReceipt.create({
+        data: {
+          tenantId,
+          idempotencyKey,
+          source,
+          eventType:     'refund',
+          resultOrderId: null,
+          resultJson:    result as Prisma.InputJsonValue,
+        },
+      });
+      return { idempotencyKey, replayed: Boolean(posted), result };
+    }, { timeout: 30_000 });
   }
 
   private keyFor(event: CourtSideEvent): string {
@@ -270,9 +320,11 @@ export class IngestService {
       return { idempotencyKey, replayed: true, result: existing.resultJson };
     }
 
-    const result = event.event_type === 'sale'
-      ? await this.handleMagnetSale(tenantId, apiKeyId, branchId, event)
-      : await this.handleMagnetRefund(tenantId, event);
+    if (event.event_type === 'refund') {
+      return this.refundOnce(tenantId, idempotencyKey, 'magnetmoments', 'MAGNETMOMENTS', event.refund_ref,
+        () => this.handleMagnetRefund(tenantId, event));
+    }
+    const result = await this.handleMagnetSale(tenantId, apiKeyId, branchId, event);
 
     try {
       await this.prisma.ingestReceipt.create({

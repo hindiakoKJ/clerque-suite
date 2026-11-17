@@ -108,7 +108,14 @@ export class CloseAndPlanService {
         tenantId,
         branchId,
         deletedAt: null,
-        createdAt: { gte: startOfDay, lte: endOfDay },
+        // A sale counts on the day it was paid, not the day it reached the
+        // server: one rung offline at 23:50 and sent next morning is
+        // yesterday's sale. A cart never paid has no paid time and goes by
+        // when it was made, as before.
+        OR: [
+          { paidAt: { gte: startOfDay, lte: endOfDay } },
+          { paidAt: null, createdAt: { gte: startOfDay, lte: endOfDay } },
+        ],
       },
       select: { totalAmount: true, status: true },
     });
@@ -182,7 +189,10 @@ export class CloseAndPlanService {
         branchId,
         deletedAt: null,
         status:    { notIn: ['VOIDED'] },
-        createdAt: { gte: sevenDaysAgo, lte: targetDate },
+        OR: [
+          { paidAt: { gte: sevenDaysAgo, lte: targetDate } },
+          { paidAt: null, createdAt: { gte: sevenDaysAgo, lte: targetDate } },
+        ],
       },
       select: {
         items: {

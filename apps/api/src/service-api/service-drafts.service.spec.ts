@@ -100,10 +100,10 @@ function build(opts: {
       findFirst: jest.fn(({ where }: any) => Promise.resolve(
         (opts.vendors ?? []).find((v) => v.name.toLowerCase() === where.name.equals.toLowerCase()) ?? null)),
     },
-    aPBill: { findFirst: jest.fn(({ where }: any) => Promise.resolve(
-      (opts.bills ?? []).find((b) => b.vendorId === where.vendorId && b.vendorBillRef === where.vendorBillRef) ?? null)) },
-    rawMaterialLot: { findFirst: jest.fn(({ where }: any) => Promise.resolve(
-      (opts.lots ?? []).find((l) => l.referenceNumber === where.referenceNumber && where.rawMaterialId.in.includes(l.rawMaterialId)) ?? null)) },
+    aPBill: { findMany: jest.fn(({ where }: any) => Promise.resolve(
+      (opts.bills ?? []).filter((b) => b.vendorId === where.vendorId))) },
+    rawMaterialLot: { findMany: jest.fn(({ where }: any) => Promise.resolve(
+      (opts.lots ?? []).filter((l) => where.rawMaterialId.in.includes(l.rawMaterialId)))) },
     receivingDraft: {
       findMany: jest.fn().mockResolvedValue(opts.receivingDrafts ?? []),
       findFirst: jest.fn().mockResolvedValue({ status: 'DRAFT' }),
@@ -357,12 +357,27 @@ describe('draft receiving', () => {
   });
 
   it('refuses a second draft of the same invoice under another reference', async () => {
-    const { svc } = build({ receivingDrafts: [{ reference: 'AIBA-OTHER', vendorId: null, supplierName: 'DAIRY CO', supplierTin: null }] });
+    const { svc } = build({ receivingDrafts: [{ reference: 'AIBA-OTHER', invoiceNumber: 'SI-1042', vendorId: null, supplierName: 'DAIRY CO', supplierTin: null }] });
     await expect(svc.draftReceiving(caller, body())).rejects.toThrow(/already a receiving draft \(reference AIBA-OTHER\)/);
   });
 
+  it('an invoice number written another way (case, spaces, dashes) is the same invoice', async () => {
+    const billed = build({ vendors: [vendor], bills: [{ vendorId: 'v1', vendorBillRef: 'si 1042', billNumber: 'BILL-000031' }] });
+    await expect(billed.svc.draftReceiving(caller, body())).rejects.toThrow(/already received \(bill BILL-000031\)/);
+    const onScreen = build({ vendors: [vendor], lots: [{ rawMaterialId: 'rm_1', referenceNumber: 'SI1042' }] });
+    await expect(onScreen.svc.draftReceiving(caller, body())).rejects.toThrow(ConflictException);
+    const drafted = build({ receivingDrafts: [{ reference: 'AIBA-OTHER', invoiceNumber: 'si-10 42', vendorId: null, supplierName: 'Dairy Co', supplierTin: null }] });
+    await expect(drafted.svc.draftReceiving(caller, body())).rejects.toThrow(/reference AIBA-OTHER/);
+  });
+
+  it('a different invoice number from the same supplier is not a duplicate', async () => {
+    const { svc } = build({ vendors: [vendor], bills: [{ vendorId: 'v1', vendorBillRef: 'SI-1043', billNumber: 'BILL-000032' }],
+      lots: [{ rawMaterialId: 'rm_1', referenceNumber: 'SI-10420' }] });
+    await expect(svc.draftReceiving(caller, body())).resolves.toMatchObject({ status: 'DRAFT' });
+  });
+
   it('the same invoice number from another supplier is not a duplicate', async () => {
-    const { svc } = build({ receivingDrafts: [{ reference: 'X', vendorId: 'v9', supplierName: 'Bakery Inc', supplierTin: '999-888-777-000' }] });
+    const { svc } = build({ receivingDrafts: [{ reference: 'X', invoiceNumber: 'SI-1042', vendorId: 'v9', supplierName: 'Bakery Inc', supplierTin: '999-888-777-000' }] });
     await expect(svc.draftReceiving(caller, body())).resolves.toMatchObject({ status: 'DRAFT', supplierMatched: false });
   });
 

@@ -47,9 +47,24 @@ export async function matchVendor(db: Db, tenantId: string, name: string, tin: s
   });
 }
 
+/** An invoice number as printed, without case, spaces or punctuation: "SI-0123", "si 0123" and "SI0123" are one. */
+export function invoiceKey(n: string | null | undefined): string {
+  const raw = (n ?? '').trim();
+  const key = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return key || raw.toUpperCase();
+}
+
+/** Same invoice number, read the way a person would: case, spaces and punctuation ignored. */
+export function sameInvoice(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = invoiceKey(a);
+  return x !== '' && x === invoiceKey(b);
+}
+
 /**
  * Has this supplier's invoice number been received already? Returns why, or
- * null. Three places say so:
+ * null. Numbers are compared with sameInvoice, so "SI-0123" typed on the
+ * screen and "si 0123" read from the photo are the same invoice. Three places
+ * say so:
  *   - an AP bill from this vendor under that invoice number, not voided or
  *     cancelled (Clerque's receiving on credit files the invoice number as
  *     the bill's vendorBillRef);
@@ -64,30 +79,34 @@ export async function findDuplicateInvoice(
   q: { invoiceNumber: string; vendorId: string | null; supplierName: string; supplierTin: string | null; itemIds: string[]; excludeDraftId?: string },
 ): Promise<string | null> {
   if (q.vendorId) {
-    const bill = await db.aPBill.findFirst({
-      where:  { tenantId, vendorId: q.vendorId, vendorBillRef: q.invoiceNumber, status: { notIn: ['VOIDED', 'CANCELLED'] } },
-      select: { billNumber: true },
+    const bills = await db.aPBill.findMany({
+      where:  { tenantId, vendorId: q.vendorId, vendorBillRef: { not: null }, status: { notIn: ['VOIDED', 'CANCELLED'] } },
+      select: { billNumber: true, vendorBillRef: true },
     });
+    const bill = bills.find((b) => sameInvoice(b.vendorBillRef, q.invoiceNumber));
     if (bill) return `Invoice ${q.invoiceNumber} from ${q.supplierName} is already received (bill ${bill.billNumber}).`;
   }
   if (q.itemIds.length) {
-    const lot = await db.rawMaterialLot.findFirst({
-      where:  { tenantId, rawMaterialId: { in: q.itemIds }, referenceNumber: q.invoiceNumber },
-      select: { id: true },
+    const lots = await db.rawMaterialLot.findMany({
+      where:    { tenantId, rawMaterialId: { in: q.itemIds }, referenceNumber: { not: null } },
+      select:   { referenceNumber: true },
+      distinct: ['referenceNumber'],
     });
-    if (lot) return `Stock was already received under invoice ${q.invoiceNumber} for an item on this invoice.`;
+    if (lots.some((l) => sameInvoice(l.referenceNumber, q.invoiceNumber))) {
+      return `Stock was already received under invoice ${q.invoiceNumber} for an item on this invoice.`;
+    }
   }
   const drafts = await db.receivingDraft.findMany({
     where: {
-      tenantId, invoiceNumber: q.invoiceNumber, status: { not: 'CANCELLED' },
+      tenantId, status: { not: 'CANCELLED' },
       ...(q.excludeDraftId ? { id: { not: q.excludeDraftId } } : {}),
     },
-    select: { reference: true, vendorId: true, supplierName: true, supplierTin: true },
+    select: { reference: true, invoiceNumber: true, vendorId: true, supplierName: true, supplierTin: true },
   });
-  const same = drafts.find((d) =>
+  const same = drafts.find((d) => sameInvoice(d.invoiceNumber, q.invoiceNumber) && (
     (q.vendorId && d.vendorId === q.vendorId)
     || sameTin(d.supplierTin, q.supplierTin)
-    || d.supplierName.trim().toLowerCase() === q.supplierName.trim().toLowerCase());
+    || d.supplierName.trim().toLowerCase() === q.supplierName.trim().toLowerCase()));
   if (same) return `Invoice ${q.invoiceNumber} from ${q.supplierName} is already a receiving draft (reference ${same.reference}).`;
   return null;
 }

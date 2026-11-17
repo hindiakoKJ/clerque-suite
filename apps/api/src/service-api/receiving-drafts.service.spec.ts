@@ -48,8 +48,8 @@ describe('ReceivingDraftsService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue({ id: 'v_new' }),
       },
-      aPBill: { findFirst: jest.fn(({ where }: any) => Promise.resolve((opts.bills ?? []).find((b) => b.vendorBillRef === where.vendorBillRef) ?? null)) },
-      rawMaterialLot: { findFirst: jest.fn().mockResolvedValue(null) },
+      aPBill: { findMany: jest.fn().mockResolvedValue(opts.bills ?? []) },
+      rawMaterialLot: { findMany: jest.fn().mockResolvedValue([]) },
       purchaseOrderItem: { findMany: jest.fn().mockResolvedValue([]) },
     };
     const receive = opts.receive ?? jest.fn().mockResolvedValue({ quantityAfter: 30 });

@@ -112,6 +112,8 @@ export class ServiceReceiptsService {
   ): Promise<string[]> {
     const why: string[] = [];
     if (parsed.lines.length === 0) why.push('No lines were read from the receipt.');
+    // KJ's rule is about known items: a receipt with no stock line at all (fees only) is always a person's.
+    else if (!parsed.lines.some((l) => l.kind !== 'expense')) why.push('There is no stock line on it; a person confirms a receipt of fees only.');
 
     const priced: Array<{ label: string; rawMaterialId: string; perUnit: number }> = [];
     for (const l of parsed.lines) {
@@ -196,6 +198,8 @@ export class ServiceReceiptsService {
   private async autoWhy(tenantId: string, branchId: string, dto: ServiceReceiptPostDto, total: number): Promise<string[]> {
     const why: string[] = [];
     const lines = dto.lines ?? [];
+    // KJ's rule is about known items: a receipt with no stock line at all (fees only) is always a person's.
+    if (lines.length === 0) why.push('There is no stock line on it; a person confirms a receipt of fees only.');
     const memory = await this.receipts.recall(tenantId, lines.map((l) => ({ printedText: l.printedText, barcode: l.barcode })));
 
     const priced: Array<{ label: string; rawMaterialId: string; perUnit: number }> = [];

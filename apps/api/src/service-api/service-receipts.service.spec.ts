@@ -282,6 +282,7 @@ describe('POST /service/procure/receipts/post, mode auto', () => {
     ['a new item', { lines: [{ create: { name: 'Oat milk', unit: 'ml' }, packsBought: 1, packSize: 1000, packCost: 150, printedText: 'OAT MILK 1L' }], total: '150' }, /would create a new item/],
     ['lines that do not foot to the total', { total: '320.00' }, /add up to ₱312.00, not the printed total ₱320.00/],
     ['no receipt number', { referenceNumber: undefined }, /No receipt number/],
+    ['fees only, no stock line', { lines: [], expenses: [{ description: 'Delivery fee', amount: 80 }], total: '80' }, /no stock line on it/],
   ])('answers NEEDS_A_PERSON and posts nothing for %s', async (_name, over, why) => {
     const { svc, confirm, drafts } = build();
     await needsAPerson(svc.post(caller, POST(over)), why);

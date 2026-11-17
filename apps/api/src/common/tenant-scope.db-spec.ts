@@ -22,7 +22,6 @@ run('tenant scope on a real database', () => {
   let productB: { id: string; name: string };
 
   beforeAll(async () => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     require('dotenv').config({ path: path.join(__dirname, '../../.env'), quiet: true });
     if (!/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL ?? '')) throw new Error('Local database only.');
     prisma = new PrismaService();

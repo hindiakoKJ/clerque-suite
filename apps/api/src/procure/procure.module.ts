@@ -34,6 +34,8 @@ import { JwtOrDeviceTokenAuthGuard } from '../auth/guards/jwt-or-device-token.gu
   controllers: [ProcureController, ProcureReceiptsController, StationRequestController, StationCountController, WeeklyCountReviewController],
   providers:   [ProcureService, ProcureReceiptsService, BuyListsExcelService, ReceiptReadLedger, ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor,
                 StationRequestService, StationCountService, JwtAuthGuard, JwtOrDeviceTokenAuthGuard],
-  exports:     [ProcureService, StationRequestService],
+  // The receipt reader and its daily cap are also the service route's
+  // (service-api/service-receipts.service.ts): one reader, one count of reads.
+  exports:     [ProcureService, StationRequestService, ProcureReceiptsService, ReceiptReadLedger],
 })
 export class ProcureModule {}

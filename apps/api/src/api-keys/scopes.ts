@@ -4,8 +4,16 @@ import type { ApiAccessLevel } from '@repo/shared-types';
 /**
  * Named scopes a tenant owner can give an API key, for the service routes
  * under `/service` (apps/api/src/service-api). A scope names exactly what a
- * machine may read or draft; nothing here lets a key post, approve, void or
- * delete, and no scope ever will.
+ * machine may read or draft. Nothing here lets a key approve, void or
+ * delete, and only one scope lets it post:
+ *
+ *   - `procure:receipts` (KJ 2026-11-17): read a PAID receipt sent through
+ *     AIBA's Telegram with Clerque's own receipt reader, and post it -- on
+ *     its own only when every printed line is one the shop confirmed before
+ *     and Clerque's own checks hold, otherwise only after a person confirmed
+ *     it in Telegram. It posts as the owner who issued the key, never as the
+ *     key. Paid receipts only; no other scope posts anything, and none ever
+ *     will without KJ saying so.
  *
  * Two kinds of key live side by side:
  *
@@ -21,12 +29,17 @@ export const API_KEY_SCOPES = [
   'inventory:draft',
   'ledger:read',
   'journal:draft',
+  'procure:receipts',
 ] as const;
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 
-/** Scopes that create something (a draft). A read-only plan does not grant them. */
-export const DRAFT_SCOPES: ReadonlySet<ApiKeyScope> = new Set<ApiKeyScope>(['inventory:draft', 'journal:draft']);
+/**
+ * Scopes that write something: a draft, or (procure:receipts) a posted paid
+ * receipt. A read-only plan does not grant them, and a key holding one is
+ * stored readwrite.
+ */
+export const DRAFT_SCOPES: ReadonlySet<ApiKeyScope> = new Set<ApiKeyScope>(['inventory:draft', 'journal:draft', 'procure:receipts']);
 
 export function isApiKeyScope(s: unknown): s is ApiKeyScope {
   return typeof s === 'string' && (API_KEY_SCOPES as readonly string[]).includes(s);

@@ -9,8 +9,11 @@
  *
  * Two kinds of key (apps/api/src/api-keys/scopes.ts):
  *   - For AIBA: named permissions, each one a thing a machine may read or
- *     draft for this shop. Nothing a key can do posts, approves, voids or
- *     deletes: a person finishes every draft in Clerque.
+ *     draft for this shop. A person finishes every draft in Clerque, and no
+ *     key approves, voids or deletes anything. One permission posts, and it
+ *     is off until the owner ticks it (KJ 2026-11-17): paid receipts sent
+ *     through AIBA's Telegram, read by Clerque's own receipt reader and posted
+ *     in the name of the owner who issued the key.
  *   - The original kind: read, or read and write, on the orders and import
  *     routes, for an accountant's tool or another app.
  *
@@ -28,11 +31,15 @@ import { useAuthStore } from '@/store/auth';
 import { planFeaturesFor } from '@repo/shared-types';
 import type { ApiAccessLevel } from '@repo/shared-types';
 
+// draft: it writes, so a read-only plan cannot give it. posts: it is off until the owner ticks it.
 const SCOPES = [
-  { id: 'inventory:read',  draft: false, title: 'Read the stock',          desc: 'Items, lots, movements, counts and open buy lists of a branch.' },
-  { id: 'inventory:draft', draft: true,  title: 'Draft stock work',        desc: 'Open a count, add to the buy list, hold a supplier delivery for you to confirm.' },
-  { id: 'ledger:read',     draft: false, title: 'Read account balances',   desc: 'The balance of chosen accounts at a date.' },
-  { id: 'journal:draft',   draft: true,  title: 'Draft journal entries',   desc: 'A journal entry in DRAFT, which a person posts.' },
+  { id: 'inventory:read',   draft: false, posts: false, title: 'Read the stock',          desc: 'Items, lots, movements, counts and open buy lists of a branch.' },
+  { id: 'inventory:draft',  draft: true,  posts: false, title: 'Draft stock work',        desc: 'Open a count, add to the buy list, hold a supplier delivery for you to confirm.' },
+  { id: 'ledger:read',      draft: false, posts: false, title: 'Read account balances',   desc: 'The balance of chosen accounts at a date.' },
+  { id: 'journal:draft',    draft: true,  posts: false, title: 'Draft journal entries',   desc: 'A journal entry in DRAFT, which a person posts.' },
+  { id: 'procure:receipts', draft: true,  posts: true,
+    title: "Read and post paid receipts sent through AIBA's Telegram",
+    desc:  'Stock in and the expense, in your name. A receipt posts on its own only when every line is one you confirmed before; otherwise a person confirms it in Telegram first.' },
 ] as const;
 type Scope = (typeof SCOPES)[number]['id'];
 
@@ -69,7 +76,7 @@ export default function ApiKeysPage() {
 
   const [kind, setKind] = useState<'aiba' | 'plain'>('aiba');
   const [label, setLabel] = useState('AIBA');
-  const [scopes, setScopes] = useState<Scope[]>(SCOPES.map((s) => s.id));
+  const [scopes, setScopes] = useState<Scope[]>(SCOPES.filter((s) => !s.posts).map((s) => s.id));
   // A read-only plan cannot give a draft permission; the plan may load after the first render.
   const granted = scopes.filter((s) => canDraft || !SCOPES.find((x) => x.id === s)?.draft);
   const [accessLevel, setAccessLevel] = useState<ApiAccessLevel>('read');
@@ -138,7 +145,8 @@ export default function ApiKeysPage() {
           API keys
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Keys let AIBA or another tool read this shop or leave drafts for you. A key never posts, approves or deletes.
+          Keys let AIBA or another tool read this shop or leave drafts for you. A key never approves or deletes, and it posts
+          nothing except paid receipts sent through AIBA&apos;s Telegram, and only if you tick that below.
         </p>
       </div>
 

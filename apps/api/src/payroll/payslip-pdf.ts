@@ -121,7 +121,7 @@ export function generatePayslipPdf(p: PayslipPdfPayload): Promise<Buffer> {
       ['PhilHealth Contribution',  p.payslip.philhealthContrib],
       ['Pag-IBIG Contribution',    p.payslip.pagibigContrib],
       ['Withholding Tax',          p.payslip.withholdingTax],
-      ['Other Deductions',         p.payslip.otherDeductions],
+      ['Cash Advance',             p.payslip.otherDeductions],
     ];
     doc.font('Helvetica').fontSize(10);
     for (const [label, amt] of deductionRows) {

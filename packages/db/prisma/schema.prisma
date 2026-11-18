@@ -695,6 +695,7 @@ model Tenant {
   receiptAliases             ReceiptAlias[]
   payRuns                    PayRun[]
   payslips                   Payslip[]
+  cashAdvances               CashAdvance[]
   documents                  Document[]
   orSequence                 OrSequence?
   expenseClaims              ExpenseClaim[]
@@ -1099,6 +1100,7 @@ model User {
   discountsAuthorized      OrderDiscount[]      @relation("AuthorizedByUser")
   timeEntries              TimeEntry[]
   payslips                 Payslip[]
+  cashAdvances             CashAdvance[]
   notifications            Notification[]
   telegramLink             TelegramLink?
   bankReconciliations      BankReconciliation[]
@@ -3959,10 +3961,84 @@ model PayRun {
   updatedAt       DateTime     @updatedAt
   tenant          Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   payslips        Payslip[]
+  cashAdvanceDeductions CashAdvanceDeduction[]
 
   @@index([tenantId, status])
   @@index([tenantId, periodStart])
   @@map("pay_runs")
+}
+
+/// A staff member's cash advance (CA) against future pay.
+///
+/// REQUESTED  the staff member asked for it in Sync; no money has moved.
+/// OPEN       the money was handed over (DR 1034 Advances to Employees /
+///            CR the account it came from) and `balance` is still owed.
+///            Each processed pay run takes up to `perPayday` off the
+///            payslip, never more than what is left of the net pay.
+/// PAID       balance reached 0 through payslips.
+/// REJECTED   the request was turned down; no money moved.
+/// CANCELLED  given by mistake and undone before any payslip took from it
+///            (the journal entry is reversed).
+enum CashAdvanceStatus {
+  REQUESTED
+  OPEN
+  PAID
+  REJECTED
+  CANCELLED
+}
+
+model CashAdvance {
+  id              String            @id @default(cuid())
+  tenantId        String
+  userId          String
+  status          CashAdvanceStatus @default(REQUESTED)
+  amount          Decimal           @db.Decimal(12, 2)
+  /// How much each payday takes back until it is paid off.
+  perPayday       Decimal           @db.Decimal(12, 2)
+  /// What is still owed. Equals `amount` when given; 0 when PAID.
+  balance         Decimal           @db.Decimal(12, 2)
+  reason          String?
+  /// Who asked in Sync (the staff member), when it came in as a request.
+  requestedById   String?
+  /// Who handed over the money. Never the staff member themself.
+  givenById       String?
+  givenAt         DateTime?
+  /// GL code the money came from: 1010 cash on hand, 1011 petty cash,
+  /// 1020 bank current, 1022 bank payroll.
+  paidFromCode    String?
+  journalEntryId  String?
+  decidedById     String?
+  rejectionReason String?
+  cancelledAt     DateTime?
+  cancelledById   String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User                   @relation(fields: [userId], references: [id])
+  deductions CashAdvanceDeduction[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, userId, status])
+  @@map("cash_advances")
+}
+
+/// What one pay run took off one cash advance. One row per advance per run.
+model CashAdvanceDeduction {
+  id            String      @id @default(cuid())
+  tenantId      String
+  cashAdvanceId String
+  payRunId      String
+  userId        String
+  amount        Decimal     @db.Decimal(12, 2)
+  createdAt     DateTime    @default(now())
+
+  cashAdvance CashAdvance @relation(fields: [cashAdvanceId], references: [id], onDelete: Cascade)
+  payRun      PayRun      @relation(fields: [payRunId], references: [id], onDelete: Cascade)
+
+  @@unique([cashAdvanceId, payRunId])
+  @@index([tenantId, payRunId])
+  @@map("cash_advance_deductions")
 }
 
 /// Individual payslip generated for one employee within a PayRun.

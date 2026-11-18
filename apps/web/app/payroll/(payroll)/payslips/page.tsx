@@ -124,7 +124,7 @@ function PayslipModal({
               <Row label="PhilHealth"       value={slip.philhealthContrib} />
               <Row label="Pag-IBIG"         value={slip.pagibigContrib}    />
               <Row label="Withholding Tax"  value={slip.withholdingTax}    />
-              <Row label="Other"            value={slip.otherDeductions}   />
+              <Row label="Cash advance"     value={slip.otherDeductions}   />
               <Row label="TOTAL DEDUCTIONS" value={slip.totalDeductions}   bold />
             </div>
           </div>

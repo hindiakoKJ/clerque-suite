@@ -13,7 +13,7 @@
  */
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plane, FileBadge, CalendarClock, Briefcase, TrendingUp, Hourglass, Clock } from 'lucide-react';
+import { ArrowLeft, Plane, FileBadge, CalendarClock, Briefcase, TrendingUp, Hourglass, Clock, Wallet } from 'lucide-react';
 import type { ElementType } from 'react';
 
 interface RequestCard {
@@ -62,6 +62,14 @@ const CARDS: RequestCard[] = [
     icon:    TrendingUp,
     title:   'Overtime',
     desc:    'Log work in excess of your shift hours.',
+    badge:   'NEW',
+    enabled: true,
+  },
+  {
+    href:    '/payroll/me/cash-advance',
+    icon:    Wallet,
+    title:   'Cash Advance',
+    desc:    'Get part of your pay early; it comes off your payslips.',
     badge:   'NEW',
     enabled: true,
   },

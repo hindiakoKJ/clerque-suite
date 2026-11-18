@@ -18,6 +18,7 @@ import {
   type PayFreq as PhPayFreq,
 } from './ph-tax-tables';
 import { hoursWorked, regularHours, payRunWindow, manilaDayOfWeek, periodsOverlap } from './pay-time';
+import { planAdvanceDeductions, CA_ACCOUNT, type OpenAdvance } from './cash-advance';
 
 // ─── Response shapes (match what the frontend expects) ───────────────────────
 
@@ -686,6 +687,20 @@ export class PayrollService {
       hoursByEmployee.set(e.userId, h);
     }
 
+    // Cash advances still owed, handed over before this period ended. Each
+    // payslip takes some back (planAdvanceDeductions), oldest first.
+    const openAdvances = await this.prisma.cashAdvance.findMany({
+      where:  { tenantId, status: 'OPEN', balance: { gt: 0 }, givenAt: { lt: window.to } },
+      select: { id: true, userId: true, balance: true, perPayday: true, givenAt: true },
+    });
+    const advancesByEmployee = new Map<string, OpenAdvance[]>();
+    for (const a of openAdvances ?? []) {
+      const list = advancesByEmployee.get(a.userId) ?? [];
+      list.push({ id: a.id, balance: Number(a.balance), perPayday: Number(a.perPayday), givenAt: a.givenAt ?? new Date(0) });
+      advancesByEmployee.set(a.userId, list);
+    }
+    const advanceTakes: { cashAdvanceId: string; userId: string; amount: number }[] = [];
+
     // Generate payslips
     const payslipData: any[] = [];
     let totalGross = 0;
@@ -711,6 +726,14 @@ export class PayrollService {
         freq,
       });
 
+      // Cash advance taken back on this payday — never more than the pay
+      // left after government deductions and tax.
+      const takes  = planAdvanceDeductions(advancesByEmployee.get(emp.id) ?? [], slip.net);
+      const caTake = round2(takes.reduce((s, t) => s + t.amount, 0));
+      for (const t of takes) advanceTakes.push({ cashAdvanceId: t.id, userId: emp.id, amount: t.amount });
+      const slipDeductions = round2(slip.totalDeductions + caTake);
+      const slipNet        = round2(slip.net - caTake);
+
       payslipData.push({
         tenantId,
         payRunId,
@@ -726,16 +749,16 @@ export class PayrollService {
         philhealthContrib: slip.philhealthEe,
         pagibigContrib:    slip.pagibigEe,
         withholdingTax:    slip.withholdingTax,
-        otherDeductions:   0,
-        totalDeductions:   slip.totalDeductions,
-        netPay:            slip.net,
+        otherDeductions:   caTake, // cash advance taken back
+        totalDeductions:   slipDeductions,
+        netPay:            slipNet,
         regularHours:      round2(hours.regular),
         overtimeHours:     round2(hours.ot),
       });
 
       totalGross      += slip.gross;
-      totalDeductions += slip.totalDeductions;
-      totalNet        += slip.net;
+      totalDeductions += slipDeductions;
+      totalNet        += slipNet;
     }
 
     // Atomically: delete old payslips (re-processing), insert new, update run status.
@@ -746,6 +769,27 @@ export class PayrollService {
     await this.prisma.$transaction(async (tx) => {
       await tx.payslip.deleteMany({ where: { payRunId, tenantId } });
       await tx.payslip.createMany({ data: payslipData });
+
+      // Take the advances down. Guarded on the balance we planned against,
+      // so a run processed at the same moment can't take the same peso twice.
+      for (const t of advanceTakes) {
+        const dec = await tx.cashAdvance.updateMany({
+          where: { id: t.cashAdvanceId, tenantId, status: 'OPEN', balance: { gte: t.amount } },
+          data:  { balance: { decrement: t.amount } },
+        });
+        if (dec.count !== 1) {
+          throw new ConflictException('A cash advance changed while this pay run was being processed. Process it again.');
+        }
+      }
+      if (advanceTakes.length) {
+        await tx.cashAdvanceDeduction.createMany({
+          data: advanceTakes.map((t) => ({ tenantId, payRunId, cashAdvanceId: t.cashAdvanceId, userId: t.userId, amount: t.amount })),
+        });
+        await tx.cashAdvance.updateMany({
+          where: { tenantId, id: { in: advanceTakes.map((t) => t.cashAdvanceId) }, status: 'OPEN', balance: { lte: 0 } },
+          data:  { status: 'PAID' },
+        });
+      }
       // TOCTOU + tenant-scoped status flip. updateMany guarded on status:
       // 'DRAFT' so two concurrent process calls cannot both produce
       // payslips and double-flip the run to COMPLETED.
@@ -835,6 +879,7 @@ export class PayrollService {
     let totalPiEe     = 0;
     let totalWht      = 0;
     let totalNet      = 0;
+    let totalCa       = 0; // cash advances taken back (Payslip.otherDeductions)
     let totalSssEr    = 0;
     let totalSssEc    = 0;
     let totalPhEr     = 0;
@@ -860,6 +905,7 @@ export class PayrollService {
       totalPiEe  += Number(s.pagibigContrib);
       totalWht   += Number(s.withholdingTax);
       totalNet   += Number(s.netPay);
+      totalCa    += Number(s.otherDeductions ?? 0);
 
       const taxableBase = Number(fs.basicPay) + Number(fs.overtimePay);
       const monthly     = toMonthlyGross(taxableBase, freq);
@@ -880,6 +926,7 @@ export class PayrollService {
 
     // Resolve account IDs by code.
     const codes = ['6010', '6020', '6030', '6040', '2030', '2040', '2050', '2060', '2081'];
+    if (round2(totalCa) > 0) codes.push(CA_ACCOUNT);
     const accountByCode: Record<string, string> = {};
     for (const code of codes) {
       const a = await this.accounts.findByCode(tenantId, code);
@@ -918,6 +965,11 @@ export class PayrollService {
             { accountId: accountByCode['2050'], credit: piPayable,                           description: 'Pag-IBIG Contributions Payable' },
             { accountId: accountByCode['2060'], credit: total(totalWht),                     description: 'Withholding Tax Payable — Compensation' },
             { accountId: accountByCode['2081'], credit: total(totalNet),                     description: 'Accrued Salaries & Wages' },
+            // Net pay is already lower by what the payslips took back;
+            // the advance it paid off comes off 1034.
+            ...(total(totalCa) > 0
+              ? [{ accountId: accountByCode[CA_ACCOUNT], credit: total(totalCa), description: 'Cash advances taken back from pay' }]
+              : []),
           ],
         },
         lockedById,
@@ -998,6 +1050,7 @@ export class PayrollService {
         pagibigContrib:   true,
         withholdingTax:   true,
         totalDeductions:  true,
+        otherDeductions:  true, // cash advance taken back: not a contribution
       },
     });
 
@@ -1009,11 +1062,12 @@ export class PayrollService {
       totalPh  += Number(s.philhealthContrib);
       totalPg  += Number(s.pagibigContrib);
       totalWht += Number(s.withholdingTax);
-      totalDed += Number(s.totalDeductions);
+      const statutory = Number(s.totalDeductions) - Number(s.otherDeductions ?? 0);
+      totalDed += statutory;
       const e   = empMap.get(s.employeeName) ?? { sss:0, ph:0, pg:0, wht:0, ded:0 };
       e.sss += Number(s.sssContrib); e.ph += Number(s.philhealthContrib);
       e.pg  += Number(s.pagibigContrib); e.wht += Number(s.withholdingTax);
-      e.ded += Number(s.totalDeductions);
+      e.ded += statutory;
       empMap.set(s.employeeName, e);
     }
 

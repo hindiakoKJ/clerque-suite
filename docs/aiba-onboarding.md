@@ -51,7 +51,7 @@ filing) is a person.
 |---|---|
 | **Tax status** VAT / NON_VAT / UNREGISTERED | Tax room: VAT returns, or percentage tax, or no BIR forms at all (books only) |
 | **Ledger mode** FULL / SIMPLE | FULL: GL and month-end close rooms. SIMPLE: a cash summary only |
-| **Staff on Clerque payroll** | Payroll room on or off |
+| **Staff on Clerque payroll** | Payroll room on or off. Most small shops give staff cash advances (CA); Clerque records them and takes them back off each payslip, so the room reads what each person still owes and its draft pay run must show that deduction |
 | **More than one branch** | Transfers between branches, a count per branch |
 | **Sales from another app** (court bookings, magnet booths, later the yard) | AR room matches payouts (Xendit, GCash, bank) to the sales those apps sent in |
 | **Sells or buys on credit** | AR room (customer balances, 2307s received) and AP due dates |

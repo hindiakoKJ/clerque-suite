@@ -151,6 +151,7 @@ Worst open items, in plain words:
    on every cloud session start. The auto-mode safety check refused to add
    it without his explicit OK.
 4. **MariBank** (below): build it on a branch when he says go.
+5. **Staff cash advances** (KJ, 18 Nov: "most small business have that for their staff"): built on branch `payroll-cash-advance`, one migration (`20261118000000_payroll_cash_advance`), waiting for his word to merge. Staff ask in Sync > Requests > Cash Advance; the owner or payroll master hands it over at Sync > Cash Advances (DR 1034 / CR cash or bank); each processed pay run takes the agreed amount back, never below zero net; locking credits 1034. Not covered: cash taken from a till mid-shift (the shift counts it short), and final pay for someone who leaves still owing.
 
 ## MariBank as a till payment method (sized, not started)
 

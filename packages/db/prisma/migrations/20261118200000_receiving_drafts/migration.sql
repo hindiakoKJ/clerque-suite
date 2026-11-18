@@ -6,7 +6,7 @@
 -- Written by `prisma migrate diff --from-schema-datamodel <previous schema>
 -- --to-schema-datamodel packages/db/prisma/schema.prisma --script`, offline;
 -- never run against a database from a session. A new table only: no
--- existing row is touched. Applies after 20261111000000_service_api_scopes.
+-- existing row is touched. Applies after 20261118100000_service_api_scopes.
 
 -- CreateTable
 CREATE TABLE "receiving_drafts" (

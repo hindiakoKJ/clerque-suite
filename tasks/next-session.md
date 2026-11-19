@@ -230,6 +230,11 @@ Found by the same map, wrong today with or without MariBank:
   15 g more Biscoff Spread each (205 g a batch of 10); Matcha cookies take
   1 pc of a Matcha Filling batch (makes 20: white chocolate 120 g, heavy
   cream 80 g, matcha 5 g, butter 5 g). Heavy Cream is a new item.
+  Receipt prices: 37 loaded 19 Nov (`Carolina-Receipt-Prices.xlsx`), checked
+  in the shop's export. Farmers Market prints no weights: KJ asked Anne to
+  have the market list each item with its kg and price. Until then Ginger is
+  wrong (P5.56/g, about P5,556/kg) and Lettuce and Siling Labuyo have no cost.
+  The 555 Sampaguita total is with Anne; its unit prices are what count.
   The two muffins are on hold (off the menu for now, KJ 19 Nov).
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's

@@ -208,10 +208,16 @@ Found by the same map, wrong today with or without MariBank:
   Spread and sugar syrup in Biscoff Frappe (50 g) and Biscoff Carolina
   (30 g). The Caramel Macchiato frappe gets 17 g of beans too, and Plain Rice
   is 1 portion of Cooked Rice. Longgo Espresso Shot (Vietnamese Latte, 70 ml)
-  becomes a batch: 17 g beans gives 70 ml. All of this (KJ, 19 Nov) is in `Carolina-Coffee-Fix.xlsx`; the
+  is replaced by 17 g of Coffee Beans on the Vietnamese Latte (KJ deletes the
+  Longgo row by hand). All of this (KJ, 19 Nov) is in `Carolina-Coffee-Fix.xlsx`; the
   import cannot delete lines, so KJ removes the Spread and syrup rows of the
-  two Biscoff drinks by hand in Products. Still open: the pastries (KJ
-  uploads them later).
+  two Biscoff drinks by hand in Products. Pastries (19 Nov, `Carolina-Pastries.xlsx`):
+  four cookie batches, each sold as 1 pc. Biscoff Delight = Biscoff cookie
+  (10 a batch), Matcha Cookies = almond matcha (10), Red Velvet Cheesecake =
+  red velvet cookie (7), Classic Cookies (7). Brown butter counts as Butter
+  / 0.8; tsp: baking soda 5 g, baking powder 4 g, salt 6 g, cornstarch 3 g,
+  vanilla 5 ml; a yolk counts as an egg. 10 new ingredients, no cost yet.
+  Still without recipes: the two muffins.
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's
   test sender, which only delivers to the Resend account's own address.

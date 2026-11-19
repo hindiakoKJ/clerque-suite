@@ -222,7 +222,7 @@ Found by the same map, wrong today with or without MariBank:
   150 g, makes about 800 ml. Whipped Cream is bought.
   Red velvet cookies have a Cream Cheese Filling batch (makes 14, each cookie
   takes 1): Magnolia cream cheese 113.5 g, powdered sugar 15 g, flour 5 g,
-  milk powder 75 g (read as 75, not 7.5), vanilla 1/8 tsp, salt 1 g
+  milk powder 7.5 g, vanilla 1/8 tsp, salt 1 g
   (`Carolina-Red-Velvet-Filling.xlsx`). The bar's sea salt cream uses the
   powder; the kitchen uses the Magnolia cream cheese.
   The two muffins are on hold (off the menu for now, KJ 19 Nov).

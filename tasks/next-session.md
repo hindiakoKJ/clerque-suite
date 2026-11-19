@@ -226,6 +226,10 @@ Found by the same map, wrong today with or without MariBank:
   milk powder 7.5 g, vanilla 1/8 tsp, salt 1 g
   (`Carolina-Red-Velvet-Filling.xlsx`). The bar's sea salt cream uses the
   powder; the kitchen uses the Magnolia cream cheese.
+  Cookie fillings (`Carolina-Cookie-Fillings.xlsx`): Biscoff cookies take
+  15 g more Biscoff Spread each (205 g a batch of 10); Matcha cookies take
+  1 pc of a Matcha Filling batch (makes 20: white chocolate 120 g, heavy
+  cream 80 g, matcha 5 g, butter 5 g). Heavy Cream is a new item.
   The two muffins are on hold (off the menu for now, KJ 19 Nov).
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's

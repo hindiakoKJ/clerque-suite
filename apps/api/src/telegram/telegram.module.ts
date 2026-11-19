@@ -19,6 +19,7 @@ import { CloseSummaryScheduler } from './close-summary.scheduler';
   controllers: [TelegramController],
   // CloseSummaryScheduler: the day's close, sent at 21:30 Manila.
   providers:   [TelegramClient, TelegramLinksService, TelegramAlertsService, CloseSummaryScheduler],
-  exports:     [TelegramAlertsService],
+  // The links service and client: Procure's supplies desk registers with them (procure/telegram-orders.service.ts).
+  exports:     [TelegramAlertsService, TelegramLinksService, TelegramClient],
 })
 export class TelegramModule {}

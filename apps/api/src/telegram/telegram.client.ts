@@ -50,8 +50,12 @@ export interface TelegramClientOptions {
 }
 
 type Outgoing =
-  | { kind: 'message'; chatId: string; text: string; attempts: number }
+  | { kind: 'message'; chatId: string; text: string; attempts: number; replyMarkup?: InlineKeyboard }
   | { kind: 'photo'; chatId: string; photo: Buffer; mime: string; filename: string; caption: string; attempts: number };
+
+/** Buttons under a message. callback_data is at most 64 bytes. */
+export interface InlineButton { text: string; callback_data: string }
+export interface InlineKeyboard { inline_keyboard: InlineButton[][] }
 
 interface ApiReply<T> { ok: boolean; result?: T; error_code?: number; description?: string; parameters?: { retry_after?: number } }
 
@@ -124,7 +128,8 @@ export class TelegramClient implements OnModuleInit {
     const res = await this.call<boolean>('setWebhook', {
       url: `${this.opts.webhookBase}/api/v1/telegram/webhook`,
       secret_token: this.webhookSecret,
-      allowed_updates: ['message', 'my_chat_member'],
+      // callback_query: the taps on the staff supplies checklist.
+      allowed_updates: ['message', 'my_chat_member', 'callback_query'],
     });
     if (res.ok) this.logger.log(`Webhook registered at ${this.opts.webhookBase}/api/v1/telegram/webhook`);
     else this.logger.warn(`Could not register the webhook: ${this.scrub(res.description ?? 'no reason given')}`);
@@ -143,11 +148,36 @@ export class TelegramClient implements OnModuleInit {
     return this.username;
   }
 
-  sendMessage(chatId: string, html: string): void {
+  sendMessage(chatId: string, html: string, replyMarkup?: InlineKeyboard): void {
     if (!this.enabled) return;
     if (!this.roomFor(chatId)) return;
-    this.outbox.push({ kind: 'message', chatId, text: html, attempts: 0 });
+    this.outbox.push({ kind: 'message', chatId, text: html, attempts: 0, ...(replyMarkup ? { replyMarkup } : {}) });
     this.startDrain();
+  }
+
+  /**
+   * Rewrites a message the bot sent, and its buttons: the supplies checklist
+   * after a tap. Not queued -- the person is looking at it and waiting -- and
+   * not retried; a failed edit leaves the old checklist, which still works.
+   */
+  async editMessage(chatId: string, messageId: number, html: string, replyMarkup?: InlineKeyboard): Promise<boolean> {
+    if (!this.enabled) return false;
+    const res = await this.call('editMessageText', {
+      chat_id: chatId, message_id: messageId, text: html, parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
+    // "message is not modified" is a tap that changed nothing: fine.
+    if (!res.ok && !/not modified/i.test(res.description ?? '')) {
+      this.logger.warn(`Could not update a checklist: ${this.scrub(res.description ?? 'no reason given')}`);
+    }
+    return res.ok;
+  }
+
+  /** Stops the spinner on a tapped button, with an optional short pop-up. */
+  answerCallback(callbackQueryId: string, text?: string): void {
+    if (!this.enabled) return;
+    void this.call('answerCallbackQuery', { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });
   }
 
   sendPhoto(chatId: string, photo: Buffer, mime: string, captionHtml: string, textIfNoRoom: string): void {
@@ -219,7 +249,10 @@ export class TelegramClient implements OnModuleInit {
           continue;
         }
         const res = item.kind === 'message'
-          ? await this.call('sendMessage', { chat_id: item.chatId, text: item.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
+          ? await this.call('sendMessage', {
+            chat_id: item.chatId, text: item.text, parse_mode: 'HTML', link_preview_options: { is_disabled: true },
+            ...(item.replyMarkup ? { reply_markup: item.replyMarkup } : {}),
+          })
           : await this.callMultipart('sendPhoto', item);
 
         if (res.ok) {

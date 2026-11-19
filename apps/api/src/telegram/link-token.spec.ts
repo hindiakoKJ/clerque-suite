@@ -1,4 +1,6 @@
-import { LINK_TTL_SECONDS, secretsMatch, signLinkCode, verifyLinkCode, webhookSecret } from './link-token';
+import {
+  LINK_TTL_SECONDS, isStaffLinkCode, secretsMatch, signLinkCode, signStaffLinkCode, verifyLinkCode, verifyStaffLinkCode, webhookSecret,
+} from './link-token';
 
 /** The one-time code that ties a Telegram chat to one Clerque user. */
 describe('Telegram link code', () => {
@@ -52,5 +54,23 @@ describe('Telegram link code', () => {
     expect(secretsMatch(s, s)).toBe(true);
     expect(secretsMatch(s, s.slice(0, 63))).toBe(false);
     expect(secretsMatch(s, undefined)).toBe(false);
+  });
+
+  describe('staff codes (supplies only)', () => {
+    it('a staff code verifies as a staff code, for a day, and never as an alerts code', () => {
+      const code = signStaffLinkCode(USER, NOW, JWT, BOT);
+      expect(isStaffLinkCode(code)).toBe(true);
+      expect(code.length).toBeLessThanOrEqual(64);
+      expect(verifyStaffLinkCode(code, NOW + 23 * 3600, JWT, BOT)).toMatchObject({ ok: true, userId: USER });
+      expect(verifyStaffLinkCode(code, NOW + 25 * 3600, JWT, BOT)).toMatchObject({ ok: false, reason: 'expired' });
+      expect(verifyLinkCode(code, NOW, JWT, BOT).ok).toBe(false);
+    });
+
+    it('an alerts code cannot pass for a staff code, even with the prefix stuck on', () => {
+      const alerts = signLinkCode(USER, NOW, JWT, BOT);
+      expect(isStaffLinkCode(alerts)).toBe(false);
+      expect(verifyStaffLinkCode(alerts, NOW, JWT, BOT).ok).toBe(false);
+      expect(verifyStaffLinkCode(`s-${alerts}`, NOW, JWT, BOT)).toMatchObject({ ok: false, reason: 'bad-signature' });
+    });
   });
 });

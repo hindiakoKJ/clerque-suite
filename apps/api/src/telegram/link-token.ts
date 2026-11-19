@@ -59,6 +59,55 @@ export function verifyLinkCode(code: string, nowSeconds: number, jwtSecret: stri
   return { ok: true, userId, issuedAt };
 }
 
+/**
+ * A staff member's code: made by the owner or a manager for someone else, and
+ * good only for ordering supplies, never for alerts. Signed over a different
+ * purpose and marked "s-" in front, so neither kind of code can pass for the
+ * other: a cook's code can never link alerts, whoever made it.
+ */
+export const STAFF_CODE_PREFIX = 's-';
+
+function staffSignature(k: Buffer, userId: string, issued: string): string {
+  return createHmac('sha256', k).update(`tg-staff:${userId}:${issued}`).digest('base64url').slice(0, 22);
+}
+
+export function signStaffLinkCode(userId: string, nowSeconds: number, jwtSecret: string, botToken: string): string {
+  if (!/^[a-z0-9]+$/i.test(userId)) throw new Error('Unexpected user id format for a Telegram link code.');
+  const issued = Math.floor(nowSeconds).toString(36);
+  const code = `${STAFF_CODE_PREFIX}${userId}_${issued}_${staffSignature(key(jwtSecret, botToken), userId, issued)}`;
+  if (code.length > 64) throw new Error('Telegram link code is longer than the 64 characters Telegram allows.');
+  return code;
+}
+
+export function isStaffLinkCode(code: string): boolean {
+  return code.startsWith(STAFF_CODE_PREFIX);
+}
+
+export function verifyStaffLinkCode(code: string, nowSeconds: number, jwtSecret: string, botToken: string): LinkCodeCheck {
+  if (!isStaffLinkCode(code)) return { ok: false, reason: 'malformed' };
+  const body = code.slice(STAFF_CODE_PREFIX.length);
+  const a = body.indexOf('_');
+  const b = a < 0 ? -1 : body.indexOf('_', a + 1);
+  if (a <= 0 || b <= a + 1 || b === body.length - 1) return { ok: false, reason: 'malformed' };
+  const userId = body.slice(0, a);
+  const issued = body.slice(a + 1, b);
+  const sig = body.slice(b + 1);
+  if (!/^[a-z0-9]+$/i.test(userId) || !/^[0-9a-z]+$/.test(issued)) return { ok: false, reason: 'malformed' };
+
+  const want = Buffer.from(staffSignature(key(jwtSecret, botToken), userId, issued));
+  const got = Buffer.from(sig);
+  if (want.length !== got.length || !timingSafeEqual(want, got)) return { ok: false, reason: 'bad-signature' };
+
+  const issuedAt = parseInt(issued, 36);
+  // A staff code is handed over in person, so it lives longer than one's own: a day.
+  if (!Number.isFinite(issuedAt) || nowSeconds - issuedAt > STAFF_LINK_TTL_SECONDS || issuedAt - nowSeconds > 60) {
+    return { ok: false, reason: 'expired' };
+  }
+  return { ok: true, userId, issuedAt };
+}
+
+export const STAFF_LINK_TTL_SECONDS = 24 * 60 * 60;
+
 /** The secret Telegram echoes on every webhook call, so nobody else can post fake updates. */
 export function webhookSecret(jwtSecret: string, botToken: string): string {
   return createHash('sha256').update(`telegram-webhook|${jwtSecret}|${botToken}`).digest('hex');

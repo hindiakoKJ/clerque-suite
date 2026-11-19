@@ -88,6 +88,15 @@ describe('UsersService — caller-authority wall', () => {
       expect(prisma.telegramLink.updateMany).not.toHaveBeenCalled();
     });
 
+    it('a staff supplies link survives a move between staff roles, not a move out of them', async () => {
+      prisma.user.findFirst.mockResolvedValue({ id: 'staff-1', role: 'CASHIER', customPermissions: [] });
+      await svc.update(TENANT, 'staff-1', { role: 'SALES_LEAD' } as any, 'BUSINESS_OWNER', 'owner-1');
+      await svc.update(TENANT, 'staff-1', { role: 'CASHIER' } as any, 'BUSINESS_OWNER', 'owner-1');
+      expect(prisma.telegramLink.updateMany).not.toHaveBeenCalled();
+      await svc.update(TENANT, 'staff-1', { role: 'BOOKKEEPER' } as any, 'BUSINESS_OWNER', 'owner-1');
+      expect(prisma.telegramLink.updateMany).toHaveBeenCalledTimes(1);
+    });
+
     it('blocks self-approval: an owner cannot change their own role or permissions', async () => {
       await expect(
         svc.update(TENANT, 'owner-1', { role: 'CASHIER' } as any, 'BUSINESS_OWNER', 'owner-1'),

@@ -6,6 +6,7 @@ import { ProcureReceiptsController } from './procure-receipts.controller';
 import { BuyListsExcelService } from './buy-lists-excel.service';
 import { StationRequestService } from './station-request.service';
 import { StationRequestController } from './station-request.controller';
+import { TelegramOrdersService } from './telegram-orders.service';
 import { StationCountService } from './station-count.service';
 import { StationCountController, WeeklyCountReviewController } from './station-count.controller';
 import { ReceiptReadLimitGuard, ReceiptReadLedger, ReleaseReceiptReadInterceptor } from './receipt-read-limit.guard';
@@ -33,7 +34,9 @@ import { JwtOrDeviceTokenAuthGuard } from '../auth/guards/jwt-or-device-token.gu
   ],
   controllers: [ProcureController, ProcureReceiptsController, StationRequestController, StationCountController, WeeklyCountReviewController],
   providers:   [ProcureService, ProcureReceiptsService, BuyListsExcelService, ReceiptReadLedger, ReceiptReadLimitGuard, ReleaseReceiptReadInterceptor,
-                StationRequestService, StationCountService, JwtAuthGuard, JwtOrDeviceTokenAuthGuard],
+                StationRequestService, StationCountService, JwtAuthGuard, JwtOrDeviceTokenAuthGuard,
+                // Staff order supplies from Telegram; registers itself with the Telegram bot.
+                TelegramOrdersService],
   // The receipt reader and its daily cap are also the service route's
   // (service-api/service-receipts.service.ts): one reader, one count of reads.
   exports:     [ProcureService, StationRequestService, ProcureReceiptsService, ReceiptReadLedger],

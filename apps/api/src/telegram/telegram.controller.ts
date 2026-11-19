@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, Headers, HttpCode, HttpStatus, Logger, Patch, Post, UnauthorizedException, UseGuards,
+  Body, Controller, Delete, Get, Headers, HttpCode, HttpStatus, Logger, Param, Patch, Post, UnauthorizedException, UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiExcludeEndpoint, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
@@ -62,6 +62,30 @@ export class TelegramController {
   @UseGuards(JwtAuthGuard)
   test(@CurrentUser() user: JwtPayload) {
     return this.links.sendTest(user);
+  }
+
+  /** Staff the owner or a manager can link for ordering supplies, and who is linked. */
+  @Get('staff')
+  @ApiBearerAuth('access-token')
+  @UseGuards(JwtAuthGuard)
+  staff(@CurrentUser() user: JwtPayload) {
+    return this.links.listStaff(user);
+  }
+
+  /** A one-time link, good for a day, for one staff member to order supplies from Telegram. Nothing else. */
+  @Post('staff/:userId/link')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('access-token')
+  @UseGuards(JwtAuthGuard)
+  staffLink(@CurrentUser() user: JwtPayload, @Param('userId') userId: string) {
+    return this.links.createStaffLink(user, userId);
+  }
+
+  @Delete('staff/:userId')
+  @ApiBearerAuth('access-token')
+  @UseGuards(JwtAuthGuard)
+  unlinkStaff(@CurrentUser() user: JwtPayload, @Param('userId') userId: string) {
+    return this.links.unlinkStaff(user, userId);
   }
 
   /**

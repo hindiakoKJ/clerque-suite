@@ -235,6 +235,13 @@ Found by the same map, wrong today with or without MariBank:
   have the market list each item with its kg and price. Until then Ginger is
   wrong (P5.56/g, about P5,556/kg) and Lettuce and Siling Labuyo have no cost.
   The 555 Sampaguita total is with Anne; its unit prices are what count.
+  Staff order supplies from Telegram (built 20 Nov, no migration): the owner
+  makes each staff member a link under Settings -> Telegram alerts -> Staff
+  who order supplies. Staff send /order to @ClerqueBot, tick supplies
+  (kitchen/bar/office supplies only) and Send, or /need item, how many. It
+  goes on the open buy list, marked "asked by", and the end-of-day buy list
+  carries it; no approve step, the owner decides how many. Receiving stays in
+  Procure. Staff links never get alerts. Not yet tried on the live bot.
   The two muffins are on hold (off the menu for now, KJ 19 Nov).
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's

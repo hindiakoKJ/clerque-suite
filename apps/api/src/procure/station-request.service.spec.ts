@@ -520,4 +520,71 @@ describe('StationRequestService', () => {
     expect(await broken.svc.sendAtClosingIfNothingSent(BRANCH, DUE, LATER)).toBe('SKIPPED');
     expect(error).toHaveBeenCalledWith(expect.stringContaining('Closing buy list failed for branch b1'));
   });
+
+  // ── staff asking in Telegram (KJ, 2026-11-19) ─────────────────────────────
+
+  describe('addRequested: supplies staff ask for in Telegram', () => {
+    const ANA: RequestContext = {
+      tenantId: T, branchId: B, branchName: 'Main', stationKind: null, stationName: null,
+      actorId: 'ana', createdById: 'ana', byLabel: 'Ana (Telegram)', source: 'STATION',
+    };
+
+    it('starts an open list, sends nothing and tells nobody: the end-of-day list carries it', async () => {
+      const { svc, requests, procure } = build();
+      const r = await svc.addRequested(ANA, [{ rawMaterialId: 'tissue', qty: 2 }], 'Ana', NOW);
+      expect(r).toMatchObject({ status: 'OPEN', added: ['Tissue roll'] });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ status: 'OPEN', sentAt: null, createdById: 'ana' });
+      expect(requests[0].lines).toEqual([expect.objectContaining({ rawMaterialId: 'tissue', qtyRequested: 2 })]);
+      expect(requests[0].notes).toContain('[ASKEDBY:tissue=Ana]');
+      expect(procure.tellTheOwners).not.toHaveBeenCalled();
+    });
+
+    it('the closing job then sends that list with the staff line on it, and the owners see who asked', async () => {
+      const { svc, requests, procure } = build();
+      await svc.addRequested(ANA, [{ rawMaterialId: 'tissue', qty: 2 }], 'Ana', NOW);
+      expect(await svc.sendAtClosingIfNothingSent(BRANCH_AT_CLOSING, DUE_AT_CLOSING, LATER_CLOSING)).toBe('SENT');
+      expect(requests).toHaveLength(1);
+      expect(requests[0].status).toBe('SENT');
+      expect(requests[0].lines.map((l) => l.rawMaterialId)).toContain('tissue');
+      const told = procure.tellTheOwners.mock.calls[0][1];
+      expect(told.notes).toContain('[ASKEDBY:tissue=Ana]');
+    });
+
+    it('a list already sent today (nobody buying yet) gets the line, and the owners are told now', async () => {
+      const { svc, requests, procure } = build({ requests: [sentList()] });
+      const r = await svc.addRequested(ANA, [{ rawMaterialId: 'tissue', qty: 1 }], 'Ana', NOW);
+      expect(r.status).toBe('SENT');
+      expect(requests[0].lines).toEqual([expect.objectContaining({ rawMaterialId: 'tissue', qtyRequested: 1 })]);
+      expect(procure.tellTheOwners).toHaveBeenCalledWith(T, expect.anything(), null, 'ana',
+        expect.objectContaining({ mode: 'updated', byLabel: 'Ana (Telegram)', changed: [{ rawMaterialId: 'tissue', was: null }] }));
+    });
+
+    it('two staff asking for the same thing keep the larger count, and both names', async () => {
+      const { svc, requests } = build();
+      await svc.addRequested(ANA, [{ rawMaterialId: 'tissue', qty: 3 }], 'Ana', NOW);
+      const ben = await svc.addRequested({ ...ANA, actorId: 'ben', createdById: 'ben', byLabel: 'Ben (Telegram)' },
+        [{ rawMaterialId: 'tissue', qty: 1 }], 'Ben', NOW);
+      expect(ben).toMatchObject({ added: [], raised: [], kept: ['Tissue roll'] });
+      expect(requests[0].lines).toEqual([expect.objectContaining({ rawMaterialId: 'tissue', qtyRequested: 3 })]);
+      expect(requests[0].notes).toContain('[ASKEDBY:tissue=Ana+Ben]');
+
+      const more = await svc.addRequested(ANA, [{ rawMaterialId: 'tissue', qty: 5 }], 'Ana', NOW);
+      expect(more.raised).toEqual(['Tissue roll']);
+      expect(requests[0].lines[0].qtyRequested).toBe(5);
+    });
+
+    it('something new is created as a kitchen supply with no cost', async () => {
+      const { svc, materials, requests } = build();
+      await svc.addRequested(ANA, [{ newItem: { name: 'Bleach', category: 'KITCHEN_SUPPLY', unit: 'pc' }, qty: 2 }], 'Ana', NOW);
+      const bleach = materials.find((m) => m.name === 'Bleach')!;
+      expect(bleach).toMatchObject({ category: 'KITCHEN_SUPPLY', unit: 'pc' });
+      expect(requests[0].lines).toEqual([expect.objectContaining({ rawMaterialId: bleach.id, qtyRequested: 2 })]);
+    });
+
+    it('nothing ticked is refused', async () => {
+      const { svc } = build();
+      await expect(svc.addRequested(ANA, [], 'Ana', NOW)).rejects.toThrow('Nothing was ticked.');
+    });
+  });
 });

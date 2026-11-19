@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, Send, Loader2, CheckCircle2, Info } from 'lucide-react';
+import { ChevronLeft, Send, Loader2, CheckCircle2, Info, Copy, Users } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -258,6 +258,8 @@ export default function TelegramAlertsPage() {
           </div>
         )}
 
+        {status?.enabled && status.canLink && <StaffOrdering />}
+
         <div className="rounded-xl border border-border bg-card p-4 flex gap-3">
           <Info className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
           <p className="text-xs text-muted-foreground">
@@ -267,6 +269,124 @@ export default function TelegramAlertsPage() {
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface StaffRow {
+  userId: string;
+  name: string;
+  role: string;
+  branch: string | null;
+  linked: boolean;
+  telegramUsername: string | null;
+}
+
+/**
+ * Staff who order supplies from Telegram (KJ, 2026-11-19). The owner or a
+ * manager makes a link for each staff member and sends it to them; opening it
+ * in Telegram lets that person tick supplies on a checklist with /order. The
+ * request lands on the next buy list. Staff never log in to Clerque, and a
+ * staff link never receives an alert.
+ */
+function StaffOrdering() {
+  const qc = useQueryClient();
+  const [made, setMade] = useState<Record<string, LinkResp>>({});
+  const { data: staff, isLoading, isError } = useQuery<StaffRow[]>({
+    queryKey: ['telegram-staff'],
+    queryFn: () => api.get('/telegram/staff').then((r) => r.data),
+    refetchOnWindowFocus: true,
+  });
+
+  const makeLink = useMutation({
+    mutationFn: (userId: string) => api.post<LinkResp>(`/telegram/staff/${userId}/link`).then((r) => ({ userId, link: r.data })),
+    onSuccess: ({ userId, link }) => setMade((m) => ({ ...m, [userId]: link })),
+    onError: (e: any) => toast.error(errText(e, 'Could not make a link. Try again.')),
+  });
+  const unlink = useMutation({
+    mutationFn: (userId: string) => api.delete(`/telegram/staff/${userId}`).then((r) => r.data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['telegram-staff'] }); toast.success('Unlinked. That chat can no longer order supplies.'); },
+    onError: (e: any) => toast.error(errText(e, 'Could not unlink.')),
+  });
+
+  const copy = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success('Link copied. Send it to them.');
+    } catch {
+      toast.error('Could not copy. Press and hold the link to copy it.');
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-5 space-y-3">
+      <h2 className="font-semibold text-foreground flex items-center gap-2">
+        <Users className="h-4 w-4" /> Staff who order supplies
+      </h2>
+      <p className="text-sm text-muted-foreground">
+        Staff send <b>/order</b> to the bot, tick cleaning materials and other supplies, and tap Send. It goes on the next
+        buy list with their name, and you decide how many to buy. Receiving stays in Procure. Staff do not log in and get no alerts.
+      </p>
+      {isError ? (
+        <p className="text-sm text-red-600">Could not load your staff.</p>
+      ) : isLoading || !staff ? (
+        <p className="text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</p>
+      ) : staff.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No staff accounts yet. Add them under Staff first.</p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {staff.map((s) => {
+            const link = made[s.userId];
+            const live = link && new Date(link.expiresAt).getTime() > Date.now();
+            return (
+              <li key={s.userId} className="py-3 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{s.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {s.linked ? `Linked${s.telegramUsername ? ` to @${s.telegramUsername}` : ''}` : 'Not linked'}
+                      {s.branch ? ` · ${s.branch}` : ''}
+                    </p>
+                  </div>
+                  {s.linked ? (
+                    <button
+                      type="button"
+                      onClick={() => unlink.mutate(s.userId)}
+                      disabled={unlink.isPending}
+                      className="px-3 py-1.5 rounded-lg border border-red-500/40 text-red-600 text-sm hover:bg-red-500/10 disabled:opacity-50 shrink-0"
+                    >
+                      Unlink
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => makeLink.mutate(s.userId)}
+                      disabled={makeLink.isPending}
+                      className="px-3 py-1.5 rounded-lg border border-border text-sm hover:bg-muted disabled:opacity-50 shrink-0"
+                    >
+                      {live ? 'New link' : 'Make link'}
+                    </button>
+                  )}
+                </div>
+                {live && !s.linked && (
+                  <div className="rounded-lg bg-muted/50 p-2 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <code className="text-xs break-all flex-1">{link.url}</code>
+                      <button type="button" onClick={() => copy(link.url)} className="p-1.5 rounded hover:bg-muted shrink-0" aria-label="Copy link">
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Send this to {s.name} only. They open it in Telegram and press Start. It works once, until{' '}
+                      {new Date(link.expiresAt).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })}.
+                    </p>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

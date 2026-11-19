@@ -14,7 +14,7 @@ import { CreateUserDto, StaffRole } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { assertPinPolicy } from '../auth/pin-policy';
 import { assertPasswordPolicy } from '../auth/password-policy';
-import { LINKABLE_ROLES } from '../telegram/link-roles';
+import { LINKABLE_ROLES, ORDER_ONLY_ROLES } from '../telegram/link-roles';
 import { assertBranchInTenant } from '../common/tenant-fk-guards';
 
 /** Roles tied to one branch -- the same list as BRANCH_SCOPED_ROLES in common/branch-scope.ts. */
@@ -297,7 +297,7 @@ export class UsersService {
   // ─── Update user ──────────────────────────────────────────────────────────
 
   async update(tenantId: string, id: string, dto: UpdateUserDto, callerRole?: string, callerId?: string) {
-    await this.findOne(tenantId, id, callerRole);
+    const before = await this.findOne(tenantId, id, callerRole) as { role?: string } | null;
 
     // Same rule as create(): moving someone to a branch only works for this
     // shop's branches. null (clearing the branch) passes through.
@@ -444,7 +444,16 @@ export class UsersService {
       already skips them, but a link left behind would quietly start sending
       again the day the role or the account came back.
     */
-    if (dto.isActive === false || (dto.role !== undefined && !LINKABLE_ROLES.includes(dto.role))) {
+    /*
+      Staff may also hold a supplies-only link (ORDER_ONLY_ROLES, made by the
+      owner for Telegram ordering). It survives a move between staff roles,
+      but not a move out of them, and an owner's or manager's alerts link never
+      survives a move down to staff.
+    */
+    const wasLinkable = LINKABLE_ROLES.includes(before?.role ?? '');
+    const roleDropsLink = dto.role !== undefined && !LINKABLE_ROLES.includes(dto.role)
+      && (wasLinkable || !ORDER_ONLY_ROLES.includes(dto.role));
+    if (dto.isActive === false || roleDropsLink) {
       await this.prisma.telegramLink.updateMany({ where: { userId: id, tenantId }, data: { chatId: null, telegramUsername: null } });
     }
 

@@ -6,10 +6,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { TelegramClient } from './telegram.client';
-import { LINK_TTL_SECONDS, signLinkCode, verifyLinkCode } from './link-token';
+import {
+  LINK_TTL_SECONDS, STAFF_LINK_TTL_SECONDS, isStaffLinkCode, signLinkCode, signStaffLinkCode, verifyLinkCode, verifyStaffLinkCode,
+} from './link-token';
 import { escapeHtml } from './messages';
-import { runAsSystem } from '../common/tenant-context';
-import { LINKABLE_ROLES } from './link-roles';
+import { runAsSystem, runForTenant } from '../common/tenant-context';
+import { LINKABLE_ROLES, ORDER_ONLY_ROLES } from './link-roles';
+import type { InlineKeyboard } from './telegram.client';
 
 /**
  * Who a shop's alerts go to, and how a chat gets onto that list.
@@ -22,7 +25,7 @@ import { LINKABLE_ROLES } from './link-roles';
  * demoted owner or a deactivated account stops getting alerts at once.
  */
 
-export { LINKABLE_ROLES };
+export { LINKABLE_ROLES, ORDER_ONLY_ROLES };
 
 const ROLE_WORDS: Record<string, string> = { BUSINESS_OWNER: 'Owner', BRANCH_MANAGER: 'Branch manager' };
 
@@ -30,10 +33,38 @@ export type AlertTopic = 'sales' | 'buying';
 
 interface TgChat { id: number | string; type?: string }
 interface TgUser { id: number | string; is_bot?: boolean; username?: string }
+export interface TgCallback {
+  id: string;
+  from?: TgUser;
+  data?: string;
+  message?: { message_id: number; chat?: TgChat; reply_markup?: InlineKeyboard };
+}
 export interface TgUpdate {
   update_id?: number;
   message?: { chat?: TgChat; from?: TgUser; text?: string };
   my_chat_member?: { chat?: TgChat; new_chat_member?: { status?: string } };
+  callback_query?: TgCallback;
+}
+
+/** The person behind a linked chat, read fresh from the database for every order. */
+export interface OrderingPerson {
+  userId: string;
+  name: string;
+  role: string;
+  tenantId: string;
+  shopName: string;
+  branchId: string | null;
+}
+
+/**
+ * Takes the staff supplies orders: the checklist, its taps and "/need". Lives
+ * with Procure (it writes the buy list), and registers itself here so this
+ * module does not have to import Procure.
+ */
+export interface OrderDesk {
+  open(chatId: string, person: OrderingPerson): Promise<void>;
+  need(chatId: string, person: OrderingPerson, text: string): Promise<void>;
+  tap(cb: TgCallback, chatId: string, person: OrderingPerson): Promise<void>;
 }
 
 @Injectable()
@@ -41,6 +72,7 @@ export class TelegramLinksService implements OnModuleInit {
   private readonly logger = new Logger('TelegramLinks');
   /** When each chat was last told "this bot only sends alerts", so chatter cannot fill the outbox. */
   private readonly toldRecently = new Map<string, number>();
+  private orderDesk: OrderDesk | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -51,6 +83,11 @@ export class TelegramLinksService implements OnModuleInit {
 
   onModuleInit() {
     this.client.onChatGone(async (chatId) => { await this.forgetChat(chatId); });
+  }
+
+  /** Procure's supplies desk, registered when Procure starts. */
+  setOrderDesk(desk: OrderDesk) {
+    this.orderDesk = desk;
   }
 
   // ── the signed-in person ────────────────────────────────────────────────
@@ -141,6 +178,120 @@ export class TelegramLinksService implements OnModuleInit {
     return { sent: true };
   }
 
+  // ── staff who order supplies (made by the owner or a manager) ───────────
+
+  /**
+   * The staff the signed-in owner or manager may link for ordering: active
+   * staff of this shop (a manager: of their own branch, or all when they have
+   * none), and whether each one's Telegram is linked.
+   */
+  async listStaff(user: JwtPayload) {
+    this.assertLinkableRole(user);
+    if (!user.tenantId) throw new ForbiddenException('No shop on this session.');
+    const scope = await this.managerScope(user);
+    const staff = await this.prisma.user.findMany({
+      where: {
+        tenantId: user.tenantId, isActive: true, role: { in: [...ORDER_ONLY_ROLES] as any },
+        ...(scope ? { OR: [{ branchId: scope }, { branchId: null }] } : {}),
+      },
+      select:  { id: true, name: true, role: true, branch: { select: { name: true } } },
+      orderBy: { name: 'asc' },
+    });
+    const links = await this.prisma.telegramLink.findMany({
+      where:  { tenantId: user.tenantId, userId: { in: staff.map((s) => s.id) }, chatId: { not: null } },
+      select: { userId: true, telegramUsername: true, linkedAt: true },
+    });
+    const linkOf = new Map(links.map((l) => [l.userId, l]));
+    return staff.map((s) => ({
+      userId:   s.id,
+      name:     s.name,
+      role:     s.role,
+      branch:   s.branch?.name ?? null,
+      linked:   linkOf.has(s.id),
+      telegramUsername: linkOf.get(s.id)?.telegramUsername ?? null,
+      linkedAt: linkOf.get(s.id)?.linkedAt ?? null,
+    }));
+  }
+
+  /** A one-time link, good for a day, that the owner hands a staff member: it lets them order supplies, and nothing else. */
+  async createStaffLink(user: JwtPayload, staffUserId: string, nowMs = Date.now()) {
+    this.assertCanLink(user);
+    const refusal = await this.shopRefusal(user.tenantId);
+    if (refusal) throw new ForbiddenException(refusal);
+    const staff = await this.staffFor(user, staffUserId);
+    const username = await this.client.botUsername();
+    if (!username) throw new ServiceUnavailableException('Telegram cannot be reached right now. Try again in a minute.');
+    const { jwtSecret, botToken } = this.client.secrets;
+    const code = signStaffLinkCode(staff.id, Math.floor(nowMs / 1000), jwtSecret, botToken);
+    await this.record(user.tenantId!, user.sub, 'Telegram supplies link made for staff', null, { staffUserId: staff.id, staffName: staff.name });
+    return {
+      url:       `https://t.me/${username}?start=${code}`,
+      expiresAt: new Date(nowMs + STAFF_LINK_TTL_SECONDS * 1000).toISOString(),
+    };
+  }
+
+  async unlinkStaff(user: JwtPayload, staffUserId: string) {
+    this.assertLinkableRole(user);
+    const staff = await this.staffFor(user, staffUserId);
+    const link = await this.prisma.telegramLink.findFirst({
+      where:  { userId: staff.id, tenantId: user.tenantId!, chatId: { not: null } },
+      select: { id: true, chatId: true, telegramUsername: true },
+    });
+    if (!link?.chatId) return { unlinked: false };
+    await this.prisma.telegramLink.updateMany({ where: { id: link.id }, data: { chatId: null, telegramUsername: null } });
+    this.client.sendMessage(link.chatId, 'Unlinked from Clerque. This chat can no longer order supplies.');
+    await this.record(user.tenantId!, user.sub, 'Telegram supplies link removed for staff', { staffUserId: staff.id, telegramUsername: link.telegramUsername }, null);
+    return { unlinked: true };
+  }
+
+  /** A manager tied to one branch only sees and links that branch's staff (and staff with no branch). */
+  private async managerScope(user: JwtPayload): Promise<string | null> {
+    if (user.role !== 'BRANCH_MANAGER') return null;
+    const me = await this.prisma.user.findFirst({ where: { id: user.sub, tenantId: user.tenantId! }, select: { branchId: true } });
+    return me?.branchId ?? null;
+  }
+
+  private async staffFor(user: JwtPayload, staffUserId: string) {
+    if (!user.tenantId) throw new ForbiddenException('No shop on this session.');
+    const staff = await this.prisma.user.findFirst({
+      where:  { id: String(staffUserId ?? ''), tenantId: user.tenantId },
+      select: { id: true, name: true, role: true, isActive: true, branchId: true },
+    });
+    if (!staff || !staff.isActive) throw new NotFoundException('That staff member is not in this shop, or is switched off.');
+    if (!ORDER_ONLY_ROLES.includes(staff.role)) {
+      throw new BadRequestException('Owners and managers link Telegram themselves, under Settings → Telegram alerts.');
+    }
+    const scope = await this.managerScope(user);
+    if (scope && staff.branchId && staff.branchId !== scope) {
+      throw new ForbiddenException('That staff member works at another branch.');
+    }
+    return staff;
+  }
+
+  /**
+   * Who is ordering from this chat, or null. Read fresh every time: someone
+   * switched off, moved to a role that cannot order, or in a suspended shop
+   * cannot order from a chat linked last week.
+   */
+  async orderingPerson(chatId: string): Promise<OrderingPerson | null> {
+    const links = await runAsSystem(async () => await this.prisma.telegramLink.findMany({
+      where:   { chatId },
+      orderBy: { linkedAt: 'desc' },
+      select:  {
+        tenantId: true,
+        user:   { select: { id: true, name: true, role: true, isActive: true, tenantId: true, branchId: true } },
+        tenant: { select: { name: true, status: true, isDemoTenant: true } },
+      },
+    }));
+    for (const l of links) {
+      const u = l.user;
+      if (!u?.isActive || u.tenantId !== l.tenantId || !l.tenant || l.tenant.status === 'SUSPENDED' || l.tenant.isDemoTenant) continue;
+      if (!ORDER_ONLY_ROLES.includes(u.role) && !LINKABLE_ROLES.includes(u.role)) continue;
+      return { userId: u.id, name: u.name, role: u.role, tenantId: l.tenantId, shopName: l.tenant.name, branchId: u.branchId };
+    }
+    return null;
+  }
+
   private assertCanLink(user: JwtPayload) {
     if (!this.client.enabled) throw new ServiceUnavailableException('Telegram alerts are not switched on for Clerque yet.');
     if (!user.tenantId) throw new ForbiddenException('No shop on this session.');
@@ -199,6 +350,11 @@ export class TelegramLinksService implements OnModuleInit {
       await this.forgetChat(String(member.chat.id));
       return;
     }
+    const cb = update.callback_query;
+    if (cb) {
+      await this.handleTap(cb);
+      return;
+    }
     const msg = update.message;
     if (!msg?.chat || msg.from?.is_bot) return;
     const chatId = String(msg.chat.id);
@@ -215,7 +371,25 @@ export class TelegramLinksService implements OnModuleInit {
         this.client.sendMessage(chatId, 'To get alerts, open Clerque, go to Settings → Telegram alerts and tap <b>Make my link</b>.');
         return;
       }
-      await this.consume(chatId, msg.from?.username ?? null, code, nowMs);
+      if (isStaffLinkCode(code)) await this.consumeStaff(chatId, msg.from?.username ?? null, code, nowMs);
+      else await this.consume(chatId, msg.from?.username ?? null, code, nowMs);
+      return;
+    }
+    if (/^\/(order|need)(@\w+)?(\s|$)/i.test(text)) {
+      const person = await this.orderingPerson(chatId);
+      if (!person) {
+        this.client.sendMessage(chatId, 'This chat is not linked to a Clerque shop. Ask the owner for your supplies link.');
+        return;
+      }
+      if (!this.orderDesk) {
+        this.client.sendMessage(chatId, 'Ordering is not available right now. Try again in a few minutes.');
+        return;
+      }
+      const desk = this.orderDesk;
+      await runForTenant(person.tenantId, async () => {
+        if (/^\/order/i.test(text)) await desk.open(chatId, person);
+        else await desk.need(chatId, person, text);
+      });
       return;
     }
     if (/^\/stop(@\w+)?$/.test(text)) {
@@ -228,7 +402,24 @@ export class TelegramLinksService implements OnModuleInit {
     if (nowMs - last < 10 * 60_000) return;
     if (this.toldRecently.size > 10_000) this.toldRecently.clear();
     this.toldRecently.set(chatId, nowMs);
-    this.client.sendMessage(chatId, 'This bot only sends alerts. To stop them, send /stop.');
+    this.client.sendMessage(chatId, 'This bot sends Clerque alerts and takes supply orders: send /order. To unlink, send /stop.');
+  }
+
+  /** A tap on a checklist button. Only ever from a private chat the bot wrote the checklist into. */
+  private async handleTap(cb: TgCallback) {
+    const chat = cb.message?.chat;
+    if (!chat || chat.type !== 'private' || cb.from?.is_bot) {
+      this.client.answerCallback(cb.id);
+      return;
+    }
+    const chatId = String(chat.id);
+    const person = await this.orderingPerson(chatId);
+    if (!person || !this.orderDesk) {
+      this.client.answerCallback(cb.id, person ? 'Ordering is not available right now.' : 'This chat is no longer linked to Clerque.');
+      return;
+    }
+    const desk = this.orderDesk;
+    await runForTenant(person.tenantId, () => desk.tap(cb, chatId, person));
   }
 
   private async consume(chatId: string, username: string | null, code: string, nowMs: number) {
@@ -304,6 +495,61 @@ export class TelegramLinksService implements OnModuleInit {
       this.logger.warn(`Could not add the linked notification: ${err instanceof Error ? err.message : err}`);
     }
     await this.record(user.tenantId!, user.id, 'Telegram alerts linked', null, { telegramUsername: link.telegramUsername });
+  }
+
+  /**
+   * A staff member's link: ordering supplies only. Saved with every alert
+   * switched off, and the alert reader never picks these roles anyway.
+   */
+  private async consumeStaff(chatId: string, username: string | null, code: string, nowMs: number) {
+    const { jwtSecret, botToken } = this.client.secrets;
+    const check = verifyStaffLinkCode(code, Math.floor(nowMs / 1000), jwtSecret, botToken);
+    if (!check.ok) {
+      this.client.sendMessage(chatId, check.reason === 'expired'
+        ? 'That link has expired. Ask the owner for a new one.'
+        : 'That link is not valid. Ask the owner for a new one.');
+      return;
+    }
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "users" WHERE id = ${check.userId} FOR UPDATE`;
+      const user = await tx.user.findUnique({
+        where:  { id: check.userId },
+        select: {
+          id: true, name: true, role: true, isActive: true, tenantId: true,
+          tenant: { select: { name: true, status: true, isDemoTenant: true } },
+        },
+      });
+      if (!user || !user.isActive || !user.tenantId || !user.tenant || user.tenant.status === 'SUSPENDED'
+          || user.tenant.isDemoTenant || !ORDER_ONLY_ROLES.includes(user.role)) {
+        return { kind: 'refused' as const };
+      }
+      const existing = await tx.telegramLink.findUnique({ where: { userId: user.id } });
+      if (existing && existing.linkedAt.getTime() >= check.issuedAt * 1000) {
+        return { kind: 'used' as const, sameChat: existing.chatId === chatId };
+      }
+      await tx.telegramLink.upsert({
+        where:  { userId: user.id },
+        create: { tenantId: user.tenantId, userId: user.id, chatId, telegramUsername: username, alertSales: false, alertBuying: false },
+        update: { tenantId: user.tenantId, chatId, telegramUsername: username, alertSales: false, alertBuying: false, linkedAt: new Date(nowMs) },
+      });
+      return { kind: 'linked' as const, user };
+    });
+
+    if (outcome.kind === 'refused') {
+      this.client.sendMessage(chatId, 'This link cannot be used. Ask the owner to check that your account is switched on.');
+      return;
+    }
+    if (outcome.kind === 'used') {
+      this.client.sendMessage(chatId, outcome.sameChat ? 'This chat is already linked.' : 'This link was already used. Ask the owner for a new one.');
+      return;
+    }
+    const { user } = outcome;
+    this.client.sendMessage(chatId, [
+      '✅ <b>Linked to Clerque</b>',
+      `Hi ${escapeHtml(user.name)}! You can now ask for supplies for <b>${escapeHtml(user.tenant!.name)}</b>.`,
+      'Send /order to open the checklist. To unlink, send /stop.',
+    ].join('\n'));
+    await this.record(user.tenantId!, user.id, 'Telegram supplies link used', null, { telegramUsername: username });
   }
 
   /**

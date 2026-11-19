@@ -7,6 +7,7 @@ import { manilaDayLabel } from '../telegram/messages';
 import type { StationContext } from '../kds/station-access';
 import { ProcureService, afterHeld, amountWords, namesInWords, onTheWay } from './procure.service';
 import { readTag, withTag } from './procure-notes';
+import { withAskedBy } from './asked-by';
 import {
   HistoryDay, PlanItem, PlanResult, SENT_LIST_HOURS, STARTING_AMOUNT_WHY, addDays, closingSentSince, historyFromUsage, planRequest,
   plannedDayFor,
@@ -389,6 +390,113 @@ export class StationRequestService {
       outcome = changes.length > 0 ? 'UPDATED' : 'NOTHING_NEW';
     }
     return { outcome, list, plan, changes, newIds: hand.newIds, lineCount };
+  }
+
+  // ── staff asking in Telegram ─────────────────────────────────────────────
+
+  /**
+   * Supplies a staff member asked for in Telegram (KJ, 2026-11-19).
+   *
+   * Unlike a screen's tap this sends nothing and forecasts nothing: the lines
+   * go on the list the next shopping will use, and the end-of-day buy list
+   * carries them to the owners, marked with who asked. The count is a
+   * suggestion -- the owner decides how many to buy. If that list already
+   * went out today (and nobody has started buying), the owners are told what
+   * was added, the way a screen's late tap tells them.
+   *
+   * Two staff asking for the same item keep the larger count, not the sum:
+   * both saw the same empty shelf.
+   */
+  async addRequested(
+    ctx: RequestContext,
+    extras: StationExtra[],
+    askedBy: string,
+    now: Date = new Date(),
+  ): Promise<{ requestNumber: string; status: string; added: string[]; raised: string[]; kept: string[] }> {
+    const asked = this.checkExtras(extras ?? []);
+    if (asked.length === 0) throw new BadRequestException('Nothing was ticked.');
+
+    let done!: {
+      list: ChosenList;
+      changes: Array<{ rawMaterialId: string; was: number | null }>;
+      kept: string[];
+      newIds: string[];
+      names: Map<string, string>;
+    };
+    for (let attempt = 0; ; attempt++) {
+      try {
+        done = await this.prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`procure-list:${ctx.tenantId}:${ctx.branchId}`}))`;
+          let list = await this.pickList(tx, ctx, now);
+          if (!list) {
+            const requestNumber = await this.procure.nextRequestNumber(ctx.tenantId);
+            list = await tx.purchaseRequest.create({
+              data:   { tenantId: ctx.tenantId, branchId: ctx.branchId, requestNumber, createdById: ctx.createdById },
+              select: LIST_SELECT,
+            });
+          }
+          const hand = await this.resolveExtras(tx, ctx.tenantId, asked);
+          const names = new Map(hand.rows.map((r) => [r.id, r.name]));
+          const changes: Array<{ rawMaterialId: string; was: number | null }> = [];
+          const kept: string[] = [];
+          const linesSoFar = list.lines.map((l) => ({ lineNumber: l.lineNumber }));
+          for (const [rawMaterialId, qty] of hand.byHand) {
+            const row = list.lines.find((l) => l.rawMaterialId === rawMaterialId);
+            if (row) {
+              if (qty > Number(row.qtyRequested)) {
+                await tx.purchaseRequestLine.update({ where: { id: row.id }, data: { qtyRequested: new Prisma.Decimal(qty) } });
+                changes.push({ rawMaterialId, was: Number(row.qtyRequested) });
+              } else {
+                kept.push(rawMaterialId);
+              }
+              continue;
+            }
+            const lineNumber = this.procure.nextLineNumber(list.requestNumber, linesSoFar);
+            linesSoFar.push({ lineNumber });
+            await tx.purchaseRequestLine.create({
+              data: { purchaseRequestId: list.id, lineNumber, rawMaterialId, qtyRequested: new Prisma.Decimal(qty), shortBy: null },
+            });
+            changes.push({ rawMaterialId, was: null });
+          }
+          const notes = withAskedBy(list.notes, [...hand.byHand.keys()], askedBy);
+          if (notes !== list.notes) {
+            await tx.purchaseRequest.update({ where: { id: list.id }, data: { notes } });
+            list = { ...list, notes };
+          }
+          return { list, changes, kept, newIds: hand.newIds, names };
+        }, { timeout: 30_000 });
+        break;
+      } catch (err) {
+        const clash = err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002' && attempt < CLASH_RETRIES;
+        if (!clash) throw err;
+      }
+    }
+
+    const { list, changes, kept, newIds, names } = done;
+    // A list already out: the owners hear about the addition now, not at closing.
+    if (list.status !== 'OPEN' && changes.length > 0) {
+      try {
+        const full = await this.prisma.purchaseRequest.findFirst({
+          where: { id: list.id, tenantId: ctx.tenantId }, include: this.procure.lineInclude(),
+        });
+        if (full) {
+          await this.procure.tellTheOwners(ctx.tenantId, full, null, ctx.actorId, {
+            mode: 'updated', changed: changes, byLabel: ctx.byLabel,
+            newItems: newIds.length > 0 ? { ids: newIds, screen: 'Telegram checklist' } : null,
+          });
+        }
+      } catch (err) {
+        this.logger.warn(`Could not tell the owners about Telegram additions to ${list.requestNumber}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    const nameOf = (id: string) => names.get(id) ?? 'item';
+    return {
+      requestNumber: list.requestNumber,
+      status:        String(list.status),
+      added:  changes.filter((c) => c.was == null).map((c) => nameOf(c.rawMaterialId)),
+      raised: changes.filter((c) => c.was != null).map((c) => nameOf(c.rawMaterialId)),
+      kept:   kept.map(nameOf),
+    };
   }
 
   // ── reading ───────────────────────────────────────────────────────────────

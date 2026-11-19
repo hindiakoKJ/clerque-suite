@@ -1,7 +1,7 @@
 import { ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import { TelegramLinksService } from './telegram-links.service';
 import { TelegramClient } from './telegram.client';
-import { signLinkCode, verifyLinkCode } from './link-token';
+import { signLinkCode, signStaffLinkCode, verifyLinkCode } from './link-token';
 
 /**
  * Linking a chat, and who a shop's alerts reach. The fake database applies
@@ -303,6 +303,104 @@ describe('TelegramLinksService', () => {
       await start('777', codeFor('anne'));
       await start('777', codeFor('mgr1'));
       expect(await svc.recipients('carolina', 'b1', 'sales')).toEqual(['777']);
+    });
+  });
+
+  describe('staff who order supplies (KJ, 2026-11-19)', () => {
+    function withStaff() {
+      const t = build();
+      const { prisma, users, links, tenants } = t;
+      prisma.user.findFirst = jest.fn(async ({ where }: any) => {
+        const u = users.find((x) => x.id === where.id && (!where.tenantId || x.tenantId === where.tenantId));
+        return u ? { ...u } : null;
+      });
+      prisma.user.findMany = jest.fn(async ({ where }: any) => users
+        .filter((u) => u.tenantId === where.tenantId && u.isActive && where.role.in.includes(u.role))
+        .filter((u) => !where.OR || where.OR.some((c: any) => c.branchId === u.branchId))
+        .map((u) => ({ id: u.id, name: u.name, role: u.role, branch: u.branchId ? { name: 'Main' } : null })));
+      const plainFindMany = prisma.telegramLink.findMany;
+      prisma.telegramLink.findMany = jest.fn(async (args: any) => {
+        if (args.select?.user) {
+          return links.filter((l) => l.chatId === args.where.chatId)
+            .map((l) => ({ tenantId: l.tenantId, user: { ...users.find((u) => u.id === l.userId)! }, tenant: tenants[l.tenantId] }));
+        }
+        if (args.select?.userId) return links.filter((l) => l.chatId && args.where.userId.in.includes(l.userId)).map((l) => ({ ...l }));
+        return plainFindMany(args);
+      });
+      const desk = { open: jest.fn(async () => undefined), need: jest.fn(async () => undefined), tap: jest.fn(async () => undefined) };
+      t.svc.setOrderDesk(desk);
+      const staffCode = (userId: string, at = sec) => signStaffLinkCode(userId, at, JWT, BOT);
+      const say = (chatId: string, text: string) =>
+        t.svc.handleUpdate({ message: { chat: { id: chatId, type: 'private' }, from: { id: chatId }, text } }, NOW);
+      return { ...t, desk, staffCode, say };
+    }
+
+    it('the owner makes a cook a link; the cook\'s chat can order but is never sent an alert', async () => {
+      const { svc, links, sent, start, staffCode } = withStaff();
+      const { url } = await svc.createStaffLink(session('anne', 'BUSINESS_OWNER'), 'cook', NOW);
+      expect(url).toContain('?start=s-cook_');
+      await start('5005', staffCode('cook'));
+      expect(links).toEqual([expect.objectContaining({ userId: 'cook', chatId: '5005', alertSales: false, alertBuying: false })]);
+      expect(sent.at(-1)!.text).toContain('/order');
+      expect(await svc.recipients('carolina', 'b1', 'sales')).toEqual([]);
+      expect(await svc.recipients('carolina', 'b1', 'buying')).toEqual([]);
+    });
+
+    it('an owner or manager cannot be given a staff link, and a cook cannot make one', async () => {
+      const { svc, start, staffCode, links } = withStaff();
+      await expect(svc.createStaffLink(session('anne', 'BUSINESS_OWNER'), 'mgr1', NOW)).rejects.toThrow('Owners and managers link Telegram themselves');
+      await expect(svc.createStaffLink(session('cook', 'GENERAL_EMPLOYEE'), 'cook', NOW)).rejects.toThrow(ForbiddenException);
+      // Even a genuine staff code for a manager links nothing.
+      await start('1', staffCode('mgr1'));
+      expect(links).toHaveLength(0);
+    });
+
+    it('a manager of another branch cannot link this branch\'s staff', async () => {
+      const { svc } = withStaff();
+      await expect(svc.createStaffLink(session('mgr2', 'BRANCH_MANAGER'), 'cook', NOW)).rejects.toThrow('another branch');
+      await expect(svc.createStaffLink(session('mgr1', 'BRANCH_MANAGER'), 'cook', NOW)).resolves.toHaveProperty('url');
+    });
+
+    it('lists the staff with who is linked, and unlinks one', async () => {
+      const { svc, start, staffCode, links } = withStaff();
+      await start('5005', staffCode('cook'));
+      expect(await svc.listStaff(session('anne', 'BUSINESS_OWNER'))).toEqual([expect.objectContaining({ userId: 'cook', linked: true, telegramUsername: 'u5005' })]);
+      expect(await svc.unlinkStaff(session('anne', 'BUSINESS_OWNER'), 'cook')).toEqual({ unlinked: true });
+      expect(links[0].chatId).toBeNull();
+    });
+
+    it('/order opens the checklist for a linked person, in their shop', async () => {
+      const { desk, start, staffCode, say } = withStaff();
+      await start('5005', staffCode('cook'));
+      await say('5005', '/order');
+      expect(desk.open).toHaveBeenCalledWith('5005', expect.objectContaining({ userId: 'cook', tenantId: 'carolina', shopName: 'Cafe Carolina', branchId: 'b1' }));
+      await say('5005', '/need Bleach, 2');
+      expect(desk.need).toHaveBeenCalledWith('5005', expect.objectContaining({ userId: 'cook' }), '/need Bleach, 2');
+    });
+
+    it('an unlinked chat, or a person switched off, cannot order', async () => {
+      const { desk, sent, start, staffCode, say, users } = withStaff();
+      await say('42', '/order');
+      expect(sent.at(-1)!.text).toContain('not linked');
+      await start('5005', staffCode('cook'));
+      users.find((u) => u.id === 'cook')!.isActive = false;
+      await say('5005', '/order');
+      expect(desk.open).not.toHaveBeenCalled();
+    });
+
+    it('a tap on the checklist reaches the desk only from a linked private chat', async () => {
+      const { svc, desk, start, staffCode, client } = withStaff();
+      (client as any).answerCallback = jest.fn();
+      await start('5005', staffCode('cook'));
+      const tap = (chatId: string, type = 'private') => svc.handleUpdate({
+        callback_query: { id: 'cb1', from: { id: chatId }, data: 'os', message: { message_id: 7, chat: { id: chatId, type } } },
+      }, NOW);
+      await tap('5005');
+      expect(desk.tap).toHaveBeenCalledWith(expect.objectContaining({ id: 'cb1' }), '5005', expect.objectContaining({ userId: 'cook' }));
+      await tap('42');
+      await tap('-100', 'group');
+      expect(desk.tap).toHaveBeenCalledTimes(1);
+      expect((client as any).answerCallback).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -16,6 +16,7 @@ import {
 import { productCeiling, servingsOf, LimitedBy } from '../products/recipe-ceiling';
 import { canSeePurchaseCosts, COST_DECIDER_ROLES } from './cost-visibility';
 import { ProcurePocket, ShortOutcome, PhotoLabel } from './dto/receive-request.dto';
+import { askersInWords, readAskedBy } from './asked-by';
 import { appendNote, withTag, readTag, withoutTag, plainNotes, LAST_PRICE_TAG, lastPricedLines } from './procure-notes';
 import { buildBuyListModel, renderBuyListPdf } from './purchase-request-pdf';
 import { BuyListCopy, BUY_LIST_PDF_LABEL } from './buy-list-labels';
@@ -790,7 +791,7 @@ export class ProcureService {
    */
   async tellTheOwners(
     tenantId: string,
-    req: { id: string; requestNumber: string; branchId: string; branch?: { name: string } | null;
+    req: { id: string; requestNumber: string; branchId: string; branch?: { name: string } | null; notes?: string | null;
            lines: Array<{ rawMaterialId: string; qtyRequested: Prisma.Decimal | number; rawMaterial: { name: string; unit: string } }> },
     pdf: Buffer | null = null,
     sentById: string | null = null,
@@ -833,6 +834,8 @@ export class ProcureService {
         : null;
       const newIds = new Set(opts.newItems?.ids ?? []);
       const startingIds = new Set(opts.startingIds ?? []);
+      // Lines staff asked for in Telegram say who asked.
+      const askers = readAskedBy(req.notes);
       const lines = told.map((l) => {
         const qty  = Number(l.qtyRequested);
         const packSize = packs.get(l.rawMaterialId)?.packSize ?? null;
@@ -841,9 +844,10 @@ export class ProcureService {
           + (startingIds.has(l.rawMaterialId) ? ' (starting amount: out, no sales history yet)' : '');
         return {
           // A new item from a station screen has no cost or reorder level yet: say where it came from.
-          name:   newIds.has(l.rawMaterialId) && opts.newItems
+          name:   (newIds.has(l.rawMaterialId) && opts.newItems
             ? `${l.rawMaterial.name} (new item from the ${opts.newItems.screen})`
-            : l.rawMaterial.name,
+            : l.rawMaterial.name)
+            + (askers.has(l.rawMaterialId) ? ` (asked by ${askersInWords(askers.get(l.rawMaterialId)!)})` : ''),
           amount: was != null ? `${amount} (was ${amountWords(was, l.rawMaterial.unit, packSize)})` : amount,
           serves: servesOf ? servesSummary(servesOf(req.branchId, l.rawMaterialId, null)) : null,
         };

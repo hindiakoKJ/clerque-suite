@@ -219,7 +219,8 @@ Found by the same map, wrong today with or without MariBank:
   vanilla 5 ml; a yolk counts as an egg. 10 new ingredients, no cost yet.
   Sea Salt Cream becomes a batch (K31, `Carolina-Sea-Salt-Cream.xlsx`):
   Cream Cheese Salted Powder 150 g, water 450 ml, ice 50 g, condensed milk
-  150 g, makes about 800 ml. Whipped Cream is bought.
+  150 g, makes about 800 ml. The Sea Salt Creme add-on takes 10 (g = ml),
+  `Carolina-Sea-Salt-Addon.xlsx`. Whipped Cream is bought.
   Red velvet cookies have a Cream Cheese Filling batch (makes 14, each cookie
   takes 1): Magnolia cream cheese 113.5 g, powdered sugar 15 g, flour 5 g,
   milk powder 7.5 g, vanilla 1/8 tsp, salt 1 g

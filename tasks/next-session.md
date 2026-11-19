@@ -217,7 +217,7 @@ Found by the same map, wrong today with or without MariBank:
   red velvet cookie (7), Classic Cookies (7). Brown butter counts as Butter
   / 0.8; tsp: baking soda 5 g, baking powder 4 g, salt 6 g, cornstarch 3 g,
   vanilla 5 ml; a yolk counts as an egg. 10 new ingredients, no cost yet.
-  Still without recipes: the two muffins.
+  The two muffins are on hold (off the menu for now, KJ 19 Nov).
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's
   test sender, which only delivers to the Resend account's own address.

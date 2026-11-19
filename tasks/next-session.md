@@ -202,9 +202,11 @@ Found by the same map, wrong today with or without MariBank:
   etc.) are on the "Decided" tab of `Carolina - Kitchen cards typed.xlsx`.
   Garlic butter is made on the spot: Garlic Bread already carries butter 5 g
   and garlic 5 g, so it needs no batch (KJ, 19 Nov). Still without recipes:
-  the add-ons (BBQ / Cheese / Sour Cream Flavorings, Extra Espresso Shot,
-  Sauce Drizzle, Sea Salt Creme, Whipped Cream), the pastries (KJ uploads
-  later), and Biscoff Mix in Biscoff Frappe (50 g) and Biscoff Carolina (30 g).
+  Sauce Drizzle, Sea Salt Creme and Whipped Cream add-ons. Fries flavorings
+  are dropped, no recipe. Every espresso is 17 g of beans (KJ, 19 Nov):
+  `Carolina-Coffee-Fix.xlsx` sets Long Black hot/iced (was 50 g), Dirty
+  Matcha iced (had none) and Extra Espresso Shot to 17 g. Also open: the
+  pastries (KJ uploads later), and Biscoff Mix in Biscoff Frappe (50 g) and Biscoff Carolina (30 g).
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's
   test sender, which only delivers to the Resend account's own address.

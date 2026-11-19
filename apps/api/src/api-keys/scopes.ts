@@ -15,6 +15,11 @@ import type { ApiAccessLevel } from '@repo/shared-types';
  *     key. Paid receipts only; no other scope posts anything, and none ever
  *     will without KJ saying so.
  *
+ *   - `payroll:read` (KJ 2026-11-19): read staff, rates, hours, pay runs,
+ *     payslips and cash advances, so AIBA's Payroll room can check a run
+ *     before the owner locks it. Read only. Off until the owner ticks it on
+ *     the key screen, because it is people's pay.
+ *
  * Two kinds of key live side by side:
  *
  *   - A key with NO scopes is the original kind: tenant-wide, judged by its
@@ -30,6 +35,7 @@ export const API_KEY_SCOPES = [
   'ledger:read',
   'journal:draft',
   'procure:receipts',
+  'payroll:read',
 ] as const;
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];

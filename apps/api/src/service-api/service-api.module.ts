@@ -14,6 +14,7 @@ import { LedgerBalancesService } from './ledger-balances.service';
 import { ServiceDraftsService } from './service-drafts.service';
 import { ReceivingDraftsService } from './receiving-drafts.service';
 import { ServiceReceiptsService } from './service-receipts.service';
+import { PayrollReadService } from './payroll-read.service';
 
 /**
  * The service API (/service) a scoped API key uses, and the person's side of
@@ -25,6 +26,6 @@ import { ServiceReceiptsService } from './service-receipts.service';
 @Module({
   imports:     [PrismaModule, ApiKeysModule, WarehouseModule, ProcureModule, AccountingModule, AuditModule, InventoryModule, DocumentsModule],
   controllers: [ServiceApiController, ReceivingDraftsController],
-  providers:   [InventorySnapshotService, LedgerBalancesService, ServiceDraftsService, ReceivingDraftsService, ServiceReceiptsService],
+  providers:   [InventorySnapshotService, LedgerBalancesService, ServiceDraftsService, ReceivingDraftsService, ServiceReceiptsService, PayrollReadService],
 })
 export class ServiceApiModule {}

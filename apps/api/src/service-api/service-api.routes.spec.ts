@@ -47,6 +47,11 @@ describe('Service API routes', () => {
     ['draftJournal',         'journal:draft',   'readwrite'],
     ['readReceipt',          'procure:receipts', 'readwrite'],
     ['postReceipt',          'procure:receipts', 'readwrite'],
+    ['payrollStaff',         'payroll:read',    'read'],
+    ['payrollHours',         'payroll:read',    'read'],
+    ['payrollRuns',          'payroll:read',    'read'],
+    ['payrollRun',           'payroll:read',    'read'],
+    ['payrollCashAdvances',  'payroll:read',    'read'],
   ];
 
   it.each(routes)('%s requires scope %s and access %s, and admits the SERVICE role', (method, scope, level) => {
@@ -75,7 +80,7 @@ describe('Service API routes', () => {
 
   it('the receipt routes take the tenant and the default branch from the key', async () => {
     const receipts = { read: jest.fn().mockResolvedValue({}), post: jest.fn().mockResolvedValue({}) };
-    const ctrl = new ServiceApiController({} as any, {} as any, {} as any, receipts as any);
+    const ctrl = new ServiceApiController({} as any, {} as any, {} as any, receipts as any, {} as any);
     const key = { isApiKey: true, tenantId: 't1', apiKeyId: 'k1', apiKeyLabel: 'AIBA', branchId: 'b1', modulePos: true } as any;
     await ctrl.postReceipt(key, { reference: 'r' } as any);
     expect(receipts.post.mock.calls[0][0]).toEqual({ tenantId: 't1', keyId: 'k1', label: 'AIBA', defaultBranchId: 'b1' });
@@ -87,20 +92,35 @@ describe('Service API routes', () => {
     expect(() => ctrl.postReceipt({ ...key, modulePos: false }, {} as any)).toThrow(/POS module is switched off/);
   });
 
+  it('the payroll routes are GETs only, take the tenant from the key, and need the Payroll module', async () => {
+    for (const m of ['payrollStaff', 'payrollHours', 'payrollRuns', 'payrollRun', 'payrollCashAdvances']) {
+      expect(Reflect.getMetadata('method', (ServiceApiController.prototype as any)[m])).toBe(0); // RequestMethod.GET
+    }
+    const payroll = { staff: jest.fn(), hours: jest.fn(), runs: jest.fn(), run: jest.fn(), cashAdvances: jest.fn() };
+    const ctrl = new ServiceApiController({} as any, {} as any, {} as any, {} as any, payroll as any);
+    const key = { isApiKey: true, tenantId: 't1', apiKeyId: 'k1', apiKeyLabel: 'AIBA', modulePayroll: true } as any;
+    ctrl.payrollHours(key, { tenantId: 't2', from: '2026-11-01', to: '2026-11-15' });
+    expect(payroll.hours.mock.calls[0][0]).toBe('t1');
+    ctrl.payrollRun(key, 'r1');
+    expect(payroll.run).toHaveBeenCalledWith('t1', 'r1');
+    expect(() => ctrl.payrollStaff({ ...key, modulePayroll: false })).toThrow(/PAYROLL module is switched off/);
+    expect(() => ctrl.payrollStaff({ role: 'BUSINESS_OWNER', tenantId: 't1' } as any)).toThrow(ForbiddenException);
+  });
+
   it('refuses a person signed in with a JWT (the tenant always comes from a key)', () => {
-    const ctrl = new ServiceApiController({} as any, {} as any, {} as any, {} as any);
+    const ctrl = new ServiceApiController({} as any, {} as any, {} as any, {} as any, {} as any);
     expect(() => ctrl.snapshot({ role: 'BUSINESS_OWNER', tenantId: 't1' } as any, {})).toThrow(ForbiddenException);
   });
 
   it("refuses when the tenant's module is switched off", () => {
-    const ctrl = new ServiceApiController({} as any, { balances: jest.fn() } as any, {} as any, {} as any);
+    const ctrl = new ServiceApiController({} as any, { balances: jest.fn() } as any, {} as any, {} as any, {} as any);
     const key = { isApiKey: true, tenantId: 't1', apiKeyId: 'k1', apiKeyLabel: 'x', moduleLedger: false } as any;
     expect(() => ctrl.balances(key, {})).toThrow(/LEDGER module is switched off/);
   });
 
   it('takes the tenant from the key, never from the query', async () => {
     const snapshot = jest.fn().mockResolvedValue({});
-    const ctrl = new ServiceApiController({ snapshot } as any, {} as any, {} as any, {} as any);
+    const ctrl = new ServiceApiController({ snapshot } as any, {} as any, {} as any, {} as any, {} as any);
     const key = { isApiKey: true, tenantId: 't1', apiKeyId: 'k1', apiKeyLabel: 'x', modulePos: true } as any;
     await ctrl.snapshot(key, { tenantId: 't2', branchId: 'b1' });
     expect(snapshot.mock.calls[0][0]).toBe('t1');

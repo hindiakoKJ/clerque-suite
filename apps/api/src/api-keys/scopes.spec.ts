@@ -107,6 +107,17 @@ describe('scope helpers', () => {
   });
 });
 
+describe('payroll:read -- read only (KJ 2026-11-19)', () => {
+  it('is a read scope: a key holding only it is stored read, and a read-only plan keeps it', () => {
+    expect(accessLevelForScopes(['payroll:read'])).toBe('read');
+    expect(effectiveScopes(['payroll:read'], 'read')).toEqual(['payroll:read']);
+  });
+  it('does not open the other scopes, and they do not open it', () => {
+    expect(() => assertApiKeyScope({ scopes: ['payroll:read'] }, 'ledger:read')).toThrow(ForbiddenException);
+    expect(() => assertApiKeyScope({ scopes: ['inventory:read', 'ledger:read'] }, 'payroll:read')).toThrow(ForbiddenException);
+  });
+});
+
 describe('procure:receipts -- the one scope that posts (paid receipts, KJ 2026-11-17)', () => {
   const RECEIPT_ROUTE = { [API_KEY_MIN_LEVEL]: 'readwrite', [API_KEY_SCOPE]: 'procure:receipts' };
 

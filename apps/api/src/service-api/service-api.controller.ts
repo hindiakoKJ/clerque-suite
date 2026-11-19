@@ -1,5 +1,5 @@
 import {
-  Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Post, Query, Req, SetMetadata, UseGuards, UseInterceptors,
+  Body, Controller, ForbiddenException, Get, HttpCode, HttpStatus, Param, Post, Query, Req, SetMetadata, UseGuards, UseInterceptors,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -12,6 +12,7 @@ import type { JwtPayload } from '@repo/shared-types';
 import { isServicePrincipal } from '../auth/strategies/api-key.strategy';
 import { InventorySnapshotService } from './inventory-snapshot.service';
 import { LedgerBalancesService } from './ledger-balances.service';
+import { PayrollReadService } from './payroll-read.service';
 import { ServiceCaller, ServiceDraftsService } from './service-drafts.service';
 import { ReceiptsCaller, ServiceReceiptsService } from './service-receipts.service';
 import { ServiceReceiptPostDto, ServiceReceiptReadDto } from './service-receipts.dto';
@@ -19,8 +20,8 @@ import { ReceiptReadLimitGuard, ReceiptReads, ReleaseReceiptReadInterceptor } fr
 
 /**
  * /api/v1/service -- what a machine (AIBA) may ask of one tenant with a
- * scoped API key: read the inventory and chosen ledger balances, and open
- * drafts a person finishes. Nothing under here approves, voids or deletes;
+ * scoped API key: read the inventory, chosen ledger balances and (payroll:read)
+ * the hours, pay runs and payslips, and open drafts a person finishes. Nothing under here approves, voids or deletes;
  * those routes live elsewhere and refuse every API key (RolesGuard fails
  * closed for role SERVICE where it is not named).
  *
@@ -46,6 +47,7 @@ export class ServiceApiController {
     private readonly ledger:    LedgerBalancesService,
     private readonly drafts:    ServiceDraftsService,
     private readonly receipts:  ServiceReceiptsService,
+    private readonly payroll:   PayrollReadService,
   ) {}
 
   @RequireApiKeyScope('inventory:read')
@@ -60,6 +62,41 @@ export class ServiceApiController {
   balances(@CurrentUser() user: JwtPayload, @Query() q: Record<string, unknown>) {
     const caller = this.caller(user, 'LEDGER');
     return this.ledger.balances(caller.tenantId, q);
+  }
+
+  /*
+   * Payroll, read only (KJ 2026-11-19): AIBA's Payroll room lists missing
+   * punches before cutoff and checks the run after it. Clerque computes the
+   * pay; nothing here processes, locks, approves or changes a rate.
+   */
+  @RequireApiKeyScope('payroll:read')
+  @Get('payroll/staff')
+  payrollStaff(@CurrentUser() user: JwtPayload) {
+    return this.payroll.staff(this.caller(user, 'PAYROLL').tenantId);
+  }
+
+  @RequireApiKeyScope('payroll:read')
+  @Get('payroll/hours')
+  payrollHours(@CurrentUser() user: JwtPayload, @Query() q: Record<string, unknown>) {
+    return this.payroll.hours(this.caller(user, 'PAYROLL').tenantId, q);
+  }
+
+  @RequireApiKeyScope('payroll:read')
+  @Get('payroll/runs')
+  payrollRuns(@CurrentUser() user: JwtPayload, @Query() q: Record<string, unknown>) {
+    return this.payroll.runs(this.caller(user, 'PAYROLL').tenantId, q);
+  }
+
+  @RequireApiKeyScope('payroll:read')
+  @Get('payroll/runs/:id')
+  payrollRun(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.payroll.run(this.caller(user, 'PAYROLL').tenantId, id);
+  }
+
+  @RequireApiKeyScope('payroll:read')
+  @Get('payroll/cash-advances')
+  payrollCashAdvances(@CurrentUser() user: JwtPayload) {
+    return this.payroll.cashAdvances(this.caller(user, 'PAYROLL').tenantId);
   }
 
   @RequireApiKeyScope('inventory:draft')
@@ -139,11 +176,11 @@ export class ServiceApiController {
    * of Clerque the route reads or drafts into. The tenant always comes from
    * the key, never from the request.
    */
-  private caller(user: JwtPayload, module: 'POS' | 'LEDGER'): ServiceCaller {
+  private caller(user: JwtPayload, module: 'POS' | 'LEDGER' | 'PAYROLL'): ServiceCaller {
     if (!isServicePrincipal(user) || !user.tenantId) {
       throw new ForbiddenException('This endpoint is for API keys.');
     }
-    const on = module === 'POS' ? user.modulePos : user.moduleLedger;
+    const on = module === 'POS' ? user.modulePos : module === 'LEDGER' ? user.moduleLedger : user.modulePayroll;
     if (on === false) throw new ForbiddenException(`The ${module} module is switched off for this business.`);
     return { tenantId: user.tenantId, keyId: user.apiKeyId, label: user.apiKeyLabel };
   }

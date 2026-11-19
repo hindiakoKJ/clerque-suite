@@ -297,8 +297,24 @@ export class AuditService {
         select: { id: true, name: true, email: true, role: true },
       });
       const byId = new Map(actors.map((u) => [u.id, u]));
+      /*
+        A row an API key wrote names the key, "apikey:<id>", never a person
+        (api-key.strategy.ts apiKeyActorId). Shown by the key's label, so the
+        owner reads "API key: Bookkeeping app" rather than "Removed user".
+      */
+      const keyIds = actorIds.filter((a) => a.startsWith('apikey:')).map((a) => a.slice('apikey:'.length));
+      const keys = keyIds.length
+        ? await this.prisma.apiKey.findMany({ where: { id: { in: keyIds }, tenantId }, select: { id: true, label: true } })
+        : [];
+      const keyLabel = new Map(keys.map((k) => [`apikey:${k.id}`, k.label]));
       for (const e of paginated) {
         if (e.source !== 'TENANT' || !e.performedBy) continue;
+        if (e.performedBy.startsWith('apikey:')) {
+          const label = keyLabel.get(e.performedBy);
+          e.performedByName = label ? `API key: ${label}` : 'API key (removed)';
+          e.performedByRole = 'SERVICE';
+          continue;
+        }
         const u = byId.get(e.performedBy);
         if (u) {
           e.performedByName  = u.name || u.email;

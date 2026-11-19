@@ -115,7 +115,7 @@ export class WarehouseController {
     @Param('lineId') lineId: string,
     @Body() body: { countedQty: number },
   ) {
-    return this.svc.setLineCount(user.tenantId!, lineId, body.countedQty);
+    return this.svc.setLineCount(user.tenantId!, lineId, body.countedQty, user.sub);
   }
 
   @ApiOperation({ summary: 'Post the count — applies variances to inventory, leaving alone (and naming) items another count has adjusted or counted again since' })

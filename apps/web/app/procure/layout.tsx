@@ -51,6 +51,9 @@ export const STOCK_ROLES   = ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER',
 // NOT granted here -- those screens carry Create / Edit / Receive controls with
 // no read-only mode, so "let them look" currently means "let them receive".
 export const REQUEST_ROLES = [...STOCK_ROLES, 'CASHIER', 'SALES_LEAD', 'GENERAL_EMPLOYEE'];
+// Confirming a delivery AIBA read receives stock at a cost and files a supplier
+// bill: the API allows the owner and the branch manager only (receiving-drafts.controller.ts).
+export const DELIVERY_ROLES = ['BUSINESS_OWNER', 'BRANCH_MANAGER'];
 
 function rolesFor(pathname: string): string[] {
   if (pathname.startsWith('/procure/requests')) return REQUEST_ROLES;
@@ -87,6 +90,7 @@ function rolesFor(pathname: string): string[] {
   // Posting a receipt moves stock and money in one tap, so it sits with the
   // roles the API already lets record a purchase and receive it.
   if (pathname.startsWith('/procure/receipts'))      return ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM'];
+  if (pathname.startsWith('/procure/deliveries'))    return DELIVERY_ROLES;
   if (pathname.startsWith('/procure/batches'))  return REQUEST_ROLES;
   if (pathname === '/procure')                  return REQUEST_ROLES;
   return STOCK_ROLES;

@@ -8,8 +8,9 @@ import {
 import { Reflector } from '@nestjs/core';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { ApiKeyStrategy } from '../strategies/api-key.strategy';
-import { API_KEY_MIN_LEVEL } from './api-key.guard';
+import { API_KEY_MIN_LEVEL, API_KEY_SCOPE } from './api-key.guard';
 import type { ApiAccessLevel } from '@repo/shared-types';
+import { assertApiKeyScope, type ApiKeyScope } from '../../api-keys/scopes';
 
 const LEVELS: Record<ApiAccessLevel, number> = { none: 0, read: 1, readwrite: 2 };
 
@@ -33,7 +34,9 @@ const LEVELS: Record<ApiAccessLevel, number> = { none: 0, read: 1, readwrite: 2 
  * in @Roles(...), and `@UseApiKey('readwrite')` is enforced here for key
  * callers so a read-only key cannot reach a write route.
  *
- * Known limit (slice 2): keys are tenant-wide, not branch- or scope-scoped.
+ * Known limit (slice 2): keys are tenant-wide, not branch-scoped. A key with
+ * named scopes (api-keys/scopes.ts) is refused here unless the route names
+ * one of them; keys of the original kind are judged by accessLevel.
  * A key can act on any branch its payload names, subject to the usual
  * tenant-ownership checks. Do not expose read routes that leak cross-branch
  * data to keys until scoped keys land.
@@ -85,6 +88,12 @@ export class JwtOrApiKeyGuard implements CanActivate {
         });
       }
     }
+    // Same scope rule as ApiKeyGuard: a scoped key never reaches these
+    // shared commerce routes unless one names its scope.
+    assertApiKeyScope(
+      principal,
+      this.reflector.getAllAndOverride<ApiKeyScope | undefined>(API_KEY_SCOPE, [ctx.getHandler(), ctx.getClass()]),
+    );
 
     if (!req.user) throw new UnauthorizedException('Not authenticated.');
     return true;

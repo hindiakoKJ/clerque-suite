@@ -491,6 +491,15 @@ export default function SettingsPage() {
                 desc="Staff who have held roles that should stay separate"
               />
             )}
+            {/* API keys: owner-only at the API (a key reads the shop and leaves drafts). */}
+            {isOwner && (
+              <SettingsCard
+                href="/settings/api-keys"
+                icon={KeyRound}
+                title="API keys"
+                desc="Keys for AIBA and other tools to read the shop or leave drafts"
+              />
+            )}
             {/* Telegram alerts: each owner or branch manager links their own phone. */}
             {(isOwner || user?.role === 'BRANCH_MANAGER') && (
               <SettingsCard

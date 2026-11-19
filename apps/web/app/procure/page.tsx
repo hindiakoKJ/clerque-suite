@@ -3,11 +3,11 @@ import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import {
   ClipboardList, Boxes, ClipboardCheck, ArrowLeftRight, Building2, Gauge, ChevronRight, Loader2, AlertTriangle, ChefHat, Receipt,
-  FileSpreadsheet, Store,
+  FileSpreadsheet, Store, Truck,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
-import { STOCK_ROLES } from './layout';
+import { STOCK_ROLES, DELIVERY_ROLES } from './layout';
 import { isMultiBranch } from './active-branches';
 import { SauceLevelsCard } from '@/components/shared/SauceLevelsCard';
 
@@ -74,7 +74,25 @@ export default function ProcureHome() {
 
   const canPost = !!user && ['BUSINESS_OWNER', 'SUPER_ADMIN', 'BRANCH_MANAGER', 'MDM'].includes(user.role);
 
+  // Supplier invoices AIBA read, waiting for the owner or manager to confirm.
+  const canConfirm = !!user && DELIVERY_ROLES.includes(user.role);
+  const { data: waiting = [] } = useQuery<unknown[]>({
+    queryKey: ['receiving-drafts', 'DRAFT'],
+    queryFn:  () => api.get('/receiving-drafts', { params: { status: 'DRAFT' } }).then((r) => r.data),
+    enabled:  canConfirm,
+    staleTime: 30_000,
+  });
+
   const tiles = [
+    {
+      href:  '/procure/deliveries',
+      Icon:  Truck,
+      title: 'Deliveries to confirm',
+      desc:  'Supplier invoices AIBA read from your photos. One tap puts them in stock and files the bill.',
+      note:  `${waiting.length} waiting`,
+      // Only a shop with something waiting sees it: most shops never get a draft.
+      show:  canConfirm && waiting.length > 0,
+    },
     {
       /*
         The way most stock actually arrives: somebody went to the market and

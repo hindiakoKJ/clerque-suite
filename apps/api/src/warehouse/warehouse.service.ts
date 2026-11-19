@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, StockTransferStatus, CycleCountStatus } from '@prisma/client';
 import { AccountingPeriodsService } from '../accounting-periods/accounting-periods.service';
@@ -6,6 +6,7 @@ import { noCostWarning } from '../inventory/inventory.service';
 import { availableQty, heldAt, heldUsage } from '../orders/held-usage';
 import { releasedHolds } from './released-holds';
 import { leftAloneMessage, leftAloneNotes, newerCounts } from './newer-count';
+import { isApiKeyActor } from '../auth/strategies/api-key.strategy';
 
 // ── Stock Transfer DTOs ────────────────────────────────────────────────────────
 
@@ -453,8 +454,12 @@ export class WarehouseService {
     return c;
   }
 
-  /** Operator enters/updates the counted qty for a line. */
-  async setLineCount(tenantId: string, lineId: string, countedQty: number) {
+  /**
+   * Operator enters/updates the counted qty for a line. `userId` is who
+   * entered it: kept on the line so that same person cannot post the count
+   * (segregation of duties, postCycleCount).
+   */
+  async setLineCount(tenantId: string, lineId: string, countedQty: number, userId?: string) {
     if (!Number.isFinite(countedQty) || countedQty < 0) {
       throw new BadRequestException('countedQty must be a non-negative number.');
     }
@@ -470,6 +475,7 @@ export class WarehouseService {
       data:  {
         countedQty:  counted,
         varianceQty: counted.minus(expected),
+        ...(userId ? { countedById: userId } : {}),
       },
     });
   }
@@ -519,6 +525,24 @@ export class WarehouseService {
       }
       if (c.status !== 'OPEN' && c.status !== 'RECORDED') {
         throw new BadRequestException('Only open or recorded counts can be posted.');
+      }
+
+      /*
+        Who counts does not post. A count is where shrinkage is either found
+        or hidden, so the person who typed the counted figures cannot also be
+        the one who moves the stock and the books by them -- no owner
+        override. Only lines the counts screen recorded an enterer for are
+        checked (countedById); a machine never posts at all: an API key can
+        open a count (/service/inventory/drafts/count) and nothing more.
+      */
+      if (!userId || isApiKeyActor(userId)) {
+        throw new ForbiddenException('A count is posted by a person signed in to Clerque.');
+      }
+      const mine = c.lines.filter((l) => !skip.has(l.rawMaterialId) && l.countedById === userId).length;
+      if (mine > 0) {
+        throw new ForbiddenException(
+          `Segregation of duties: you entered ${mine} of this count's figures, so someone else has to post it.`,
+        );
       }
 
       /*

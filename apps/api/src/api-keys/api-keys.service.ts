@@ -4,6 +4,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import type { ApiAccessLevel, PlanCode, TaxStatus } from '@repo/shared-types';
 import { normalizePlanCode, planFeaturesFor } from '@repo/shared-types';
+import { ApiKeyScope, accessLevelForScopes, effectiveScopes, normaliseScopes } from './scopes';
 
 /** How long a successfully-verified key stays cached. Also the worst-case
  *  delay before a revoke or plan downgrade takes effect. */
@@ -17,7 +18,11 @@ const API_KEY_CACHE_MAX    = 500;
 export interface ResolvedApiKey {
   tenantId:    string;
   keyId:       string;
+  /** The owner's name for the key; what the audit trail shows as the actor. */
+  label:       string;
   accessLevel: ApiAccessLevel;
+  /** Named scopes, already clamped to the tenant's plan (scopes.ts). */
+  scopes:      ApiKeyScope[];
   planCode:    PlanCode;
   /** Drives VAT math — an external app must never tell us its own tax status. */
   taxStatus:   TaxStatus;
@@ -36,6 +41,7 @@ export interface IssuedApiKey {
   label:       string;
   keyPrefix:   string;
   accessLevel: ApiAccessLevel;
+  scopes:      ApiKeyScope[];
   expiresAt:   Date | null;
   createdAt:   Date;
 }
@@ -49,16 +55,38 @@ export class ApiKeysService {
    * The plaintext is hashed with bcrypt for storage; we keep the first 12
    * chars (prefix) un-hashed so we can look up by prefix and bcrypt-compare
    * the remainder. Plaintext is returned exactly once.
+   *
+   * `scopes` makes a scoped key (scopes.ts): confined to the /service routes
+   * its scopes name. Its accessLevel follows from them (readwrite only when
+   * it may draft), so a caller may leave accessLevel out; one that sends a
+   * level that disagrees is refused rather than half-honoured.
    */
   async create(
     tenantId:    string,
     createdById: string,
     label:       string,
-    accessLevel: ApiAccessLevel,
+    accessLevel: ApiAccessLevel | undefined,
     expiresAt?:  Date | null,
+    scopesIn?:   unknown,
   ): Promise<IssuedApiKey> {
     if (!label || !label.trim()) {
       throw new BadRequestException('Label is required.');
+    }
+    const { scopes, unknown } = normaliseScopes(scopesIn);
+    if (unknown.length) {
+      throw new BadRequestException(`Unknown scope(s): ${unknown.join(', ')}.`);
+    }
+    if (scopesIn != null && !scopes.length) {
+      throw new BadRequestException('Give at least one scope, or leave scopes out for a key of the original kind.');
+    }
+    if (scopes.length) {
+      const implied = accessLevelForScopes(scopes);
+      if (accessLevel != null && accessLevel !== implied) {
+        throw new BadRequestException(
+          `A key with these scopes has access "${implied}"; leave accessLevel out or send "${implied}".`,
+        );
+      }
+      accessLevel = implied;
     }
     if (accessLevel !== 'read' && accessLevel !== 'readwrite') {
       throw new BadRequestException('accessLevel must be "read" or "readwrite".');
@@ -78,6 +106,7 @@ export class ApiKeysService {
         keyPrefix,
         keyHash,
         accessLevel,
+        scopes,
         createdById,
         expiresAt:   expiresAt ?? null,
       },
@@ -86,6 +115,7 @@ export class ApiKeysService {
         label:       true,
         keyPrefix:   true,
         accessLevel: true,
+        scopes:      true,
         expiresAt:   true,
         createdAt:   true,
       },
@@ -97,6 +127,7 @@ export class ApiKeysService {
       label:       row.label,
       keyPrefix:   row.keyPrefix,
       accessLevel: row.accessLevel as ApiAccessLevel,
+      scopes:      normaliseScopes(row.scopes).scopes,
       expiresAt:   row.expiresAt,
       createdAt:   row.createdAt,
     };
@@ -111,6 +142,7 @@ export class ApiKeysService {
         label:       true,
         keyPrefix:   true,
         accessLevel: true,
+        scopes:      true,
         isActive:    true,
         lastUsedAt:  true,
         expiresAt:   true,
@@ -169,7 +201,9 @@ export class ApiKeysService {
         id: true,
         tenantId: true,
         keyHash: true,
+        label: true,
         accessLevel: true,
+        scopes: true,
         // Sprint 25 — pull the tenant's CURRENT planCode so we can re-check
         // apiAccess on every request. Otherwise a key issued while the
         // tenant was Solo Pro (apiAccess: 'read') keeps working forever
@@ -219,6 +253,12 @@ export class ApiKeysService {
         const storedLevel = (row.accessLevel as ApiAccessLevel);
         const effective: ApiAccessLevel =
           storedLevel === 'readwrite' && planApi === 'read' ? 'read' : storedLevel;
+        // A scoped key whose scopes the plan no longer grants (all of them
+        // draft scopes on a read-only plan) can do nothing today. It must not
+        // fall back to being a key of the original kind, which an empty
+        // scope list would otherwise mean.
+        const scopes = effectiveScopes(row.scopes, planApi);
+        if ((row.scopes ?? []).length > 0 && scopes.length === 0) return null;
 
         // Fire-and-forget lastUsedAt update.
         void this.prisma.apiKey.update({
@@ -228,7 +268,9 @@ export class ApiKeysService {
         const resolved: ResolvedApiKey = {
           tenantId:    row.tenantId,
           keyId:       row.id,
+          label:       row.label,
           accessLevel: effective,
+          scopes,
           planCode:    currentPlan,
           taxStatus:   (row.tenant?.taxStatus ?? 'UNREGISTERED') as TaxStatus,
           businessName:  row.tenant?.businessName ?? null,

@@ -12,9 +12,16 @@ import type { JwtPayload, ApiAccessLevel } from '@repo/shared-types';
 import { ApiKeysService } from './api-keys.service';
 
 interface CreateApiKeyDto {
-  label:       string;
-  accessLevel: ApiAccessLevel;
-  expiresAt?:  string | null;
+  label:        string;
+  /** Required for a key of the original kind; follows from `scopes` otherwise. */
+  accessLevel?: ApiAccessLevel;
+  expiresAt?:   string | null;
+  /**
+   * Named scopes for the /service routes (api-keys/scopes.ts), e.g.
+   * ["inventory:read", "journal:draft"]. A key with scopes reaches only the
+   * routes that ask for one of them.
+   */
+  scopes?:      string[];
 }
 
 @ApiTags('API Keys')
@@ -33,7 +40,7 @@ export class ApiKeysController {
     if (expiresAt && Number.isNaN(expiresAt.getTime())) {
       throw new BadRequestException('expiresAt is not a valid date.');
     }
-    return this.svc.create(user.tenantId, user.sub, dto.label, dto.accessLevel, expiresAt);
+    return this.svc.create(user.tenantId, user.sub, dto.label, dto.accessLevel, expiresAt, dto.scopes);
   }
 
   @Roles('BUSINESS_OWNER')

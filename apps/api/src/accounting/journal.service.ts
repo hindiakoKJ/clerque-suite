@@ -242,6 +242,35 @@ export class JournalService {
     await this.assertPostingControl(tenantId, lineInputs, 'MANUAL');
     await this.periods.assertDateIsOpen(tenantId, entry.postingDate ?? entry.date);
 
+    /*
+      An entry an API key drafted (source AIBA) still meets the approval
+      threshold when a person posts it: at or over jeApprovalThreshold it goes
+      to PENDING_APPROVAL for an approver, exactly as a manual entry posted
+      straight from the screen does in create(). The draft was never checked
+      on its way in -- drafts are not -- so this is the first and only gate.
+    */
+    if (entry.source === 'AIBA') {
+      const tenant = await this.prisma.tenant.findUnique({
+        where:  { id: tenantId },
+        select: { jeApprovalThreshold: true },
+      });
+      const threshold = Number(tenant?.jeApprovalThreshold ?? 0);
+      const amount = Math.max(
+        lineInputs.reduce((s, l) => s + l.debit, 0),
+        lineInputs.reduce((s, l) => s + l.credit, 0),
+      );
+      if (threshold > 0 && amount >= threshold) {
+        await this.prisma.journalEntry.updateMany({
+          where: { id, tenantId, status: 'DRAFT' },
+          data:  { status: 'PENDING_APPROVAL' },
+        });
+        return this.prisma.journalEntry.findFirst({
+          where: { id, tenantId },
+          include: { lines: { include: { account: { select: { code: true, name: true } } } } },
+        });
+      }
+    }
+
     // HIGH-1 TOCTOU fix: updateMany with compound { id, tenantId, status: 'DRAFT' }
     // ensures the write is atomically scoped to this tenant and the correct draft state.
     // A plain update({ where: { id } }) would succeed even if tenantId changed between

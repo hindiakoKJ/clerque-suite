@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import { ApiKeysService } from '../../api-keys/api-keys.service';
 import type { ApiAccessLevel, JwtPayload } from '@repo/shared-types';
 import { PLAN_FEATURES, PLAN_LIMITS, taxStatusFlags } from '@repo/shared-types';
+import type { ApiKeyScope } from '../../api-keys/scopes';
 
 /**
  * The principal a request gets when it authenticates with an API key
@@ -13,7 +14,11 @@ import { PLAN_FEATURES, PLAN_LIMITS, taxStatusFlags } from '@repo/shared-types';
 export interface ServicePrincipal extends JwtPayload {
   isApiKey:    true;
   apiKeyId:    string;
+  /** The owner's name for the key: what the audit trail names as the actor. */
+  apiKeyLabel: string;
   accessLevel: ApiAccessLevel;
+  /** Empty for a key of the original kind (api-keys/scopes.ts). */
+  scopes:      ApiKeyScope[];
 }
 
 /** True when this request came from a machine, not a person. */
@@ -32,6 +37,25 @@ export function isServicePrincipal(
  */
 export function actorUserId(user: JwtPayload): string | null {
   return isServicePrincipal(user) ? null : user.sub;
+}
+
+/** Marks a creator-id column or an audit actor as "this API key", never a person. */
+export const API_KEY_ACTOR_PREFIX = 'apikey:';
+
+/**
+ * The value to write into a creator column that cannot be null
+ * (CycleCount.startedById, PurchaseRequest.createdById) or into
+ * AuditLog.performedBy when an API key made the record: "apikey:<key id>".
+ * Never a user id, so nothing is attributed to a person who did not act,
+ * and a key id, not its label, so renaming a key cannot rewrite history.
+ */
+export function apiKeyActorId(keyId: string): string {
+  return `${API_KEY_ACTOR_PREFIX}${keyId}`;
+}
+
+/** True for a creator / actor value written by apiKeyActorId. */
+export function isApiKeyActor(id: string | null | undefined): boolean {
+  return typeof id === 'string' && id.startsWith(API_KEY_ACTOR_PREFIX);
 }
 
 /**
@@ -83,7 +107,9 @@ export class ApiKeyStrategy {
       // ── Machine identity ────────────────────────────────────────────────
       isApiKey:    true,
       apiKeyId:    resolved.keyId,
+      apiKeyLabel: resolved.label,
       accessLevel: resolved.accessLevel,
+      scopes:      resolved.scopes,
 
       // ── JwtPayload shape, so the normal guards work unchanged ───────────
       sub:          '',

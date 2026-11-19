@@ -201,12 +201,15 @@ Found by the same map, wrong today with or without MariBank:
   in. Assumptions made (pinch 0.5 g, cucumber slice 10 g, 130 g pasta packs,
   etc.) are on the "Decided" tab of `Carolina - Kitchen cards typed.xlsx`.
   Garlic butter is made on the spot: Garlic Bread already carries butter 5 g
-  and garlic 5 g, so it needs no batch (KJ, 19 Nov). Still without recipes:
-  Sauce Drizzle, Sea Salt Creme and Whipped Cream add-ons. Fries flavorings
-  are dropped, no recipe. Every espresso is 17 g of beans (KJ, 19 Nov):
-  `Carolina-Coffee-Fix.xlsx` sets Long Black hot/iced (was 50 g), Dirty
-  Matcha iced (had none) and Extra Espresso Shot to 17 g. Also open: the
-  pastries (KJ uploads later), and Biscoff Mix in Biscoff Frappe (50 g) and Biscoff Carolina (30 g).
+  and garlic 5 g, so it needs no batch. Fries flavorings are dropped, no
+  recipe. Every espresso is 17 g of beans. Add-ons: Sauce Drizzle 5 ml
+  (chocolate sauce stands in, the customer picks the sauce), Sea Salt Creme
+  15 ml, Whipped Cream 15 g, as in the drinks. Biscoff Mix replaces the
+  Spread and sugar syrup in Biscoff Frappe (50 g) and Biscoff Carolina
+  (30 g). All of this (KJ, 19 Nov) is in `Carolina-Coffee-Fix.xlsx`; the
+  import cannot delete lines, so KJ removes the Spread and syrup rows of the
+  two Biscoff drinks by hand in Products. Still open: the pastries (KJ
+  uploads them later).
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's
   test sender, which only delivers to the Resend account's own address.

@@ -200,8 +200,11 @@ Found by the same map, wrong today with or without MariBank:
   and tenders plates. Checked against the shop's own export: all 150 lines
   in. Assumptions made (pinch 0.5 g, cucumber slice 10 g, 130 g pasta packs,
   etc.) are on the "Decided" tab of `Carolina - Kitchen cards typed.xlsx`.
-  Still without recipes: the flavorings, coffee add-ons, garlic butter, the
-  pastries the kitchen makes, and which drinks use the new Biscoff Mix.
+  Garlic butter is made on the spot: Garlic Bread already carries butter 5 g
+  and garlic 5 g, so it needs no batch (KJ, 19 Nov). Still without recipes:
+  the add-ons (BBQ / Cheese / Sour Cream Flavorings, Extra Espresso Shot,
+  Sauce Drizzle, Sea Salt Creme, Whipped Cream), the pastries (KJ uploads
+  later), and Biscoff Mix in Biscoff Frappe (50 g) and Biscoff Carolina (30 g).
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's
   test sender, which only delivers to the Resend account's own address.

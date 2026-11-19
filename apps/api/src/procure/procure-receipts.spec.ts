@@ -1017,6 +1017,32 @@ describe('the shop remembers what it tagged', () => {
     expect(remembered[0].create).toMatchObject({ rawMaterialId: 'new-wheat-bread', key: 'bc:04806502720301' });
   });
 
+  it('recall answers what the memory says each printed line is, barcode first, and nothing for an unknown line', async () => {
+    const { svc } = build({ aliases: [ANGELINA, { ...ANGELINA, tenantId: 'other', key: 'bc:999', printedKey: 'theirs', rawMaterialId: 'sugar' }] });
+    const r = await svc.recall(TENANT, [
+      { printedText: 'ANGELINA NO SUGAR AD', barcode: '04806503950622' },
+      { printedText: 'angelina  no sugar ad', barcode: null },     // by the printed text
+      { printedText: 'SOMETHING ELSE', barcode: null },
+      { printedText: 'THEIRS', barcode: '999' },                  // another shop's memory
+      { printedText: '', barcode: null },                          // nothing to look up
+    ]);
+    expect(r).toEqual([{ rawMaterialId: 'milk', packSize: 1000 }, { rawMaterialId: 'milk', packSize: 1000 }, null, null, null]);
+  });
+
+  it('a note from the service route sits between the key tag and the store and receipt number, and the same receipt is still caught', async () => {
+    const { svc, requests, remembered } = build();
+    await svc.confirm(TENANT, USER, BRANCH, {
+      paymentMethod: 'OWNER_FUNDED', receiptDate: '2026-09-01', vendor: 'Robinsons', referenceNumber: 'OR 88', idempotencyKey: 'AIBA-RC-1',
+      lines: [{ rawMaterialId: 'milk', packsBought: 2, packSize: 1000, packCost: 106, printedText: 'ANGELINA NO SUGAR AD', barcode: '04806503950622' }],
+    } as any, undefined, { note: 'Through AIBA (key [AIBA]); sent by Maria on Telegram' });
+    // (Receiving appends the store and receipt number once more, as it always has; the end is what the check reads.)
+    expect(requests[0].notes.startsWith('[RCPT:AIBA-RC-1] Through AIBA (key AIBA); sent by Maria on Telegram · Robinsons · OR 88')).toBe(true);
+    expect(requests[0].notes.endsWith(' Robinsons · OR 88')).toBe(true);
+    expect(remembered).toHaveLength(1);
+    expect(await svc.alreadyReceived(TENANT, 'robinsons', 'or 88')).toBe(requests[0].requestNumber);
+    expect(await svc.alreadyReceived(TENANT, 'Robinsons', null)).toBeNull();
+  });
+
   it('never fails a posting over a memory that could not be written', async () => {
     const { svc, prisma } = build();
     prisma.receiptAlias.upsert.mockRejectedValue(new Error('db away'));

@@ -324,6 +324,36 @@ export class ProcureReceiptsService {
   }
 
   /**
+   * What the shop's memory says each of these printed lines is, by the same
+   * rule the reader uses (barcode first, then the printed text): the
+   * ingredient and the pack size it was posted with, or null for a line the
+   * shop never tagged (or tagged to an ingredient no longer in use). Reads
+   * nothing else and writes nothing. The service route checks a receipt
+   * AIBA wants to post on its own against this, never against what AIBA says.
+   */
+  async recall(
+    tenantId: string,
+    lines: Array<{ printedText?: string | null; barcode?: string | null }>,
+  ): Promise<Array<{ rawMaterialId: string; packSize: number | null } | null>> {
+    if (lines.length === 0) return [];
+    const parsed: ParsedLine[] = lines.map((l) => {
+      const description = (l.printedText ?? '').trim();
+      const barcode = l.barcode?.trim() || null;
+      return {
+        description, barcode,
+        // A line with nothing printed on it has nothing to look up.
+        kind: description || barcode ? 'ingredient' : 'expense',
+        quantity: null, unit: null, unitPrice: null, lineTotal: null, expenseCategory: null, confidence: 1,
+      };
+    });
+    const known = await this.rememberedFor(tenantId, parsed, await this.materials(tenantId));
+    return parsed.map((_, i) => {
+      const hit = known.get(i);
+      return hit ? { rawMaterialId: hit.material.id, packSize: hit.packSize } : null;
+    });
+  }
+
+  /**
    * Learn what was tagged. Every posted stock line that came off the reader
    * (it carries the printed text) is filed under its barcode or its text with
    * the ingredient chosen and the pack size posted; a re-tag overwrites. Never
@@ -379,7 +409,16 @@ export class ProcureReceiptsService {
    * would match nothing a person could point at. A row that creates a new
    * ingredient has no history, so there is nothing to ask about it yet.
    */
-  async confirm(tenantId: string, userId: string, fallbackBranchId: string | undefined, dto: ConfirmReceiptDto, sanity?: SanityContext) {
+  async confirm(
+    tenantId: string, userId: string, fallbackBranchId: string | undefined, dto: ConfirmReceiptDto, sanity?: SanityContext,
+    /**
+     * A line for the request's notes, before the store and receipt number:
+     * how the receipt came in when it did not come from the screen (the
+     * service route writes "Through AIBA (key ...); sent by ... on Telegram").
+     * Only a receipt posted on its own carries it.
+     */
+    opts: { note?: string } = {},
+  ) {
     let confirmed: SanityWarning[] = [];
     if (this.sanity && sanity?.optedIn && dto.lines?.length) {
       const posted = await this.alreadyOnTheShelf(tenantId, dto);
@@ -399,7 +438,7 @@ export class ProcureReceiptsService {
         dto = { ...dto, lines: dto.lines.map((l, i) => (accepted.has(`row:${i}`) ? { ...l, acceptCostChange: true } : l)) } as ConfirmReceiptDto;
       }
     }
-    const result = await this.confirmChecked(tenantId, userId, fallbackBranchId, dto, confirmed);
+    const result = await this.confirmChecked(tenantId, userId, fallbackBranchId, dto, confirmed, opts.note);
     // Posted, so what the person tagged is now what the shop knows.
     await this.remember(tenantId, userId, dto, (result as { created?: Array<{ id: string; name: string }> }).created ?? []);
     if (this.sanity && confirmed.length > 0) {
@@ -428,7 +467,10 @@ export class ProcureReceiptsService {
     return new Set((req?.lines ?? []).map((l) => l.rawMaterialId));
   }
 
-  private async confirmChecked(tenantId: string, userId: string, fallbackBranchId: string | undefined, dto: ConfirmReceiptDto, confirmed: SanityWarning[] = []) {
+  private async confirmChecked(
+    tenantId: string, userId: string, fallbackBranchId: string | undefined, dto: ConfirmReceiptDto,
+    confirmed: SanityWarning[] = [], note?: string,
+  ) {
     if (dto.purchaseRequestId) return this.confirmOnto(tenantId, userId, dto, confirmed);
     const branchId = dto.branchId ?? fallbackBranchId;
     if (!branchId) throw new BadRequestException('Which branch received this?');
@@ -552,7 +594,11 @@ export class ProcureReceiptsService {
         status:      'BOUGHT',
         sentAt:      now,
         boughtAt:    now,
-        notes:       [dto.idempotencyKey ? this.keyTag(dto.idempotencyKey) : null, label || null]
+        // The key tag first (the replay reads it there), the store and receipt
+        // number last (the same-receipt check reads them there), and how it
+        // came in, when it was not the screen, between them.
+        notes:       [dto.idempotencyKey ? this.keyTag(dto.idempotencyKey) : null,
+                      [note?.replace(/[[\]]/g, '').trim() || null, label || null].filter(Boolean).join(' · ') || null]
                        .filter(Boolean).join(' ') || null,
         createdById: userId,
         sentById:    userId,
@@ -911,6 +957,24 @@ export class ProcureReceiptsService {
     const ref = dto.referenceNumber?.trim();
     if (!ref) return;
     const label = [dto.vendor?.trim(), ref].filter(Boolean).join(' · ');
+    const twin = await this.alreadyReceived(tenantId, dto.vendor, ref);
+    if (twin) {
+      throw new ConflictException(
+        `Receipt ${label} is already in (request ${twin}). ` +
+        'If this is a different receipt with the same number, add something to the reference to tell them apart.',
+      );
+    }
+  }
+
+  /**
+   * The request number of a receipt already in under this store and receipt
+   * number, or null (also null when there is no receipt number to go by).
+   * The same test refuseSameReceiptTwice applies, without refusing.
+   */
+  async alreadyReceived(tenantId: string, vendor: string | null | undefined, referenceNumber: string | null | undefined): Promise<string | null> {
+    const ref = referenceNumber?.trim();
+    if (!ref) return null;
+    const label = [vendor?.trim(), ref].filter(Boolean).join(' · ');
     const twin = await this.prisma.purchaseRequest.findFirst({
       where: {
         tenantId,
@@ -922,12 +986,7 @@ export class ProcureReceiptsService {
       },
       select: { requestNumber: true },
     });
-    if (twin) {
-      throw new ConflictException(
-        `Receipt ${label} is already in (request ${twin.requestNumber}). ` +
-        'If this is a different receipt with the same number, add something to the reference to tell them apart.',
-      );
-    }
+    return twin?.requestNumber ?? null;
   }
 
   /**

@@ -64,19 +64,7 @@ export class AiQuotaGuard implements CanActivate {
     // Smart Account Picker (no LLM) calls /ai/suggest-accounts — those are
     // free. We DON'T count rows for that action, so they never burn quota.
     // Drafter / Guide / OCR each create one row in AiUsage and DO count.
-    const startOfMonth = new Date();
-    startOfMonth.setUTCDate(1);
-    startOfMonth.setUTCHours(0, 0, 0, 0);
-
-    const used = await this.prisma.aiUsage.count({
-      where: {
-        tenantId,
-        createdAt: { gte: startOfMonth },
-        // Procure's receipt reader spends a prompt like the others and is
-        // counted like the others; left off this list it was free.
-        action:    { in: ['journal_drafter', 'journal_guide', 'receipt_ocr', 'procure_receipt_lines'] },
-      },
-    });
+    const used = await aiPromptsUsedThisMonth(this.prisma, tenantId);
 
     if (used >= quota) {
       throw new ForbiddenException({
@@ -91,4 +79,24 @@ export class AiQuotaGuard implements CanActivate {
     (req as { aiUsage?: { used: number; quota: number } }).aiUsage = { used, quota };
     return true;
   }
+}
+
+/**
+ * The prompts a tenant has spent this calendar month (UTC), as the guard
+ * counts them. Exported for a route that cannot use the guard because its
+ * caller carries no aiQuotaMonthly (an API key: service-receipts.service.ts).
+ */
+export async function aiPromptsUsedThisMonth(prisma: Pick<PrismaService, 'aiUsage'>, tenantId: string): Promise<number> {
+  const startOfMonth = new Date();
+  startOfMonth.setUTCDate(1);
+  startOfMonth.setUTCHours(0, 0, 0, 0);
+  return prisma.aiUsage.count({
+    where: {
+      tenantId,
+      createdAt: { gte: startOfMonth },
+      // Procure's receipt reader spends a prompt like the others and is
+      // counted like the others; left off this list it was free.
+      action:    { in: ['journal_drafter', 'journal_guide', 'receipt_ocr', 'procure_receipt_lines'] },
+    },
+  });
 }

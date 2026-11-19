@@ -107,6 +107,45 @@ describe('scope helpers', () => {
   });
 });
 
+describe('procure:receipts -- the one scope that posts (paid receipts, KJ 2026-11-17)', () => {
+  const RECEIPT_ROUTE = { [API_KEY_MIN_LEVEL]: 'readwrite', [API_KEY_SCOPE]: 'procure:receipts' };
+
+  it('a key without it is refused on the receipt routes, whatever else it holds', async () => {
+    const guard = new ApiKeyGuard(
+      strategyGiving({ scopes: ['inventory:read', 'inventory:draft', 'ledger:read', 'journal:draft'], accessLevel: 'readwrite' }),
+      reflectorWith(RECEIPT_ROUTE),
+    );
+    await expect(guard.canActivate(ctxFor().ctx)).rejects.toMatchObject({ response: { code: 'API_KEY_MISSING_SCOPE', required: 'procure:receipts' } });
+  });
+
+  it('a key holding it, on a read-write plan, gets in', async () => {
+    const guard = new ApiKeyGuard(strategyGiving({ scopes: ['procure:receipts'], accessLevel: 'readwrite' }), reflectorWith(RECEIPT_ROUTE));
+    await expect(guard.canActivate(ctxFor().ctx)).resolves.toBe(true);
+  });
+
+  it('it writes, so it is stored readwrite and a read-only plan drops it like the draft scopes', () => {
+    expect(accessLevelForScopes(['procure:receipts'])).toBe('readwrite');
+    expect(effectiveScopes(['inventory:read', 'procure:receipts'], 'read')).toEqual(['inventory:read']);
+    expect(effectiveScopes(['procure:receipts'], 'readwrite')).toEqual(['procure:receipts']);
+  });
+
+  it('resolves for the principal on a read-write plan (the only plan today); the clamp above is what a read-only one gets', async () => {
+    const key = 'clq_live_' + 'c'.repeat(32); // a made-up key for the test
+    const keyHash = await bcrypt.hash(key, 4);
+    const prisma = {
+      apiKey: {
+        update: jest.fn().mockResolvedValue({}),
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'k3', tenantId: 't1', keyHash, label: 'AIBA', accessLevel: 'readwrite', scopes: ['procure:receipts'],
+          tenant: { planCode: 'CLERQUE', taxStatus: 'VAT', businessName: null, modulePos: true, moduleLedger: true, modulePayroll: true, branches: [] },
+        }]),
+      },
+    };
+    await expect(new ApiKeysService(prisma as any).resolveKey(key))
+      .resolves.toMatchObject({ scopes: ['procure:receipts'], accessLevel: 'readwrite', label: 'AIBA' });
+  });
+});
+
 describe('ApiKeysService — issuing and resolving scoped keys', () => {
   const prismaWith = (extra: Record<string, unknown> = {}) => ({
     apiKey: {

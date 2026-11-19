@@ -206,7 +206,8 @@ Found by the same map, wrong today with or without MariBank:
   (chocolate sauce stands in, the customer picks the sauce), Sea Salt Creme
   15 ml, Whipped Cream 15 g, as in the drinks. Biscoff Mix replaces the
   Spread and sugar syrup in Biscoff Frappe (50 g) and Biscoff Carolina
-  (30 g). All of this (KJ, 19 Nov) is in `Carolina-Coffee-Fix.xlsx`; the
+  (30 g). The Caramel Macchiato frappe gets 17 g of beans too, and Plain Rice
+  is 1 portion of Cooked Rice. All of this (KJ, 19 Nov) is in `Carolina-Coffee-Fix.xlsx`; the
   import cannot delete lines, so KJ removes the Spread and syrup rows of the
   two Biscoff drinks by hand in Products. Still open: the pastries (KJ
   uploads them later).

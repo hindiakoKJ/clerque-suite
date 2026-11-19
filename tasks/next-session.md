@@ -190,9 +190,23 @@ Found by the same map, wrong today with or without MariBank:
   recipes (sauces, breading, breaded chicken, cooked pasta and rice) and the
   recipes of 13 plates (6 starters, 7 wing flavours), 0 import errors. The
   workbook and its "Questions for Anne" tab are kept outside this repository
-  (client prices); KJ has them. Still without recipes: the pasta and rice
-  meal plates, breakfast, salads, sandwiches, pastries, add-ons, and 12
-  counter items.
+  (client prices); KJ has them.
+- 19 Nov: the kitchen's filled-in recipe cards were loaded the same way
+  (file `Carolina-Kitchen-Import-2.xlsx`, outside the repo): 31 new
+  ingredients with no cost (receipts through Procure set costs), 23 batches
+  (7 new; the cream sauces, mayo mustard and breading are now counted in
+  grams) and 29 plates: the pasta and rice meals, breakfast, salads,
+  sandwiches and garlic bread, plus new sauce amounts on the fries, nachos
+  and tenders plates. Checked against the shop's own export: all 150 lines
+  in. Assumptions made (pinch 0.5 g, cucumber slice 10 g, 130 g pasta packs,
+  etc.) are on the "Decided" tab of `Carolina - Kitchen cards typed.xlsx`.
+  Still without recipes: the flavorings, coffee add-ons, garlic butter, the
+  pastries the kitchen makes, and which drinks use the new Biscoff Mix.
+- Email: production had no `RESEND_API_KEY`, so no reset email was ever
+  sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's
+  test sender, which only delivers to the Resend account's own address.
+  Verify the clerque.cc domain in Resend and set a clerque.cc `MAIL_FROM`
+  before any other owner needs a reset or payslip email.
 - Reorder levels: none yet on the 72 kitchen ingredients and the 19 batch
   recipes, plus 9 drinks ingredients.
 - Close the 3 open August cashier shifts and the old buy list

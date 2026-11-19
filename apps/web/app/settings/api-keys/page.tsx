@@ -13,7 +13,8 @@
  *     key approves, voids or deletes anything. One permission posts, and it
  *     is off until the owner ticks it (KJ 2026-11-17): paid receipts sent
  *     through AIBA's Telegram, read by Clerque's own receipt reader and posted
- *     in the name of the owner who issued the key.
+ *     in the name of the owner who issued the key. Reading the staff's hours
+ *     and pay (KJ 2026-11-19) is off until the owner ticks it too.
  *   - The original kind: read, or read and write, on the orders and import
  *     routes, for an accountant's tool or another app.
  *
@@ -31,15 +32,19 @@ import { useAuthStore } from '@/store/auth';
 import { planFeaturesFor } from '@repo/shared-types';
 import type { ApiAccessLevel } from '@repo/shared-types';
 
-// draft: it writes, so a read-only plan cannot give it. posts: it is off until the owner ticks it.
+// draft: it writes, so a read-only plan cannot give it. optIn: it is off until the owner ticks it
+// (posting paid receipts; reading people's pay).
 const SCOPES = [
-  { id: 'inventory:read',   draft: false, posts: false, title: 'Read the stock',          desc: 'Items, lots, movements, counts and open buy lists of a branch.' },
-  { id: 'inventory:draft',  draft: true,  posts: false, title: 'Draft stock work',        desc: 'Open a count, add to the buy list, hold a supplier delivery for you to confirm.' },
-  { id: 'ledger:read',      draft: false, posts: false, title: 'Read account balances',   desc: 'The balance of chosen accounts at a date.' },
-  { id: 'journal:draft',    draft: true,  posts: false, title: 'Draft journal entries',   desc: 'A journal entry in DRAFT, which a person posts.' },
-  { id: 'procure:receipts', draft: true,  posts: true,
+  { id: 'inventory:read',   draft: false, optIn: false, title: 'Read the stock',          desc: 'Items, lots, movements, counts and open buy lists of a branch.' },
+  { id: 'inventory:draft',  draft: true,  optIn: false, title: 'Draft stock work',        desc: 'Open a count, add to the buy list, hold a supplier delivery for you to confirm.' },
+  { id: 'ledger:read',      draft: false, optIn: false, title: 'Read account balances',   desc: 'The balance of chosen accounts at a date.' },
+  { id: 'journal:draft',    draft: true,  optIn: false, title: 'Draft journal entries',   desc: 'A journal entry in DRAFT, which a person posts.' },
+  { id: 'procure:receipts', draft: true,  optIn: true,
     title: "Read and post paid receipts sent through AIBA's Telegram",
     desc:  'Stock in and the expense, in your name. A receipt posts on its own only when every line is one you confirmed before; otherwise a person confirms it in Telegram first.' },
+  { id: 'payroll:read',     draft: false, optIn: true,
+    title: "Read your staff's hours and pay",
+    desc:  'Rates, time entries, pay runs, payslips and cash advances, so AIBA can check a run before you lock it. Read only: it never processes, locks or changes pay. No government numbers.' },
 ] as const;
 type Scope = (typeof SCOPES)[number]['id'];
 
@@ -76,7 +81,7 @@ export default function ApiKeysPage() {
 
   const [kind, setKind] = useState<'aiba' | 'plain'>('aiba');
   const [label, setLabel] = useState('AIBA');
-  const [scopes, setScopes] = useState<Scope[]>(SCOPES.filter((s) => !s.posts).map((s) => s.id));
+  const [scopes, setScopes] = useState<Scope[]>(SCOPES.filter((s) => !s.optIn).map((s) => s.id));
   // A read-only plan cannot give a draft permission; the plan may load after the first render.
   const granted = scopes.filter((s) => canDraft || !SCOPES.find((x) => x.id === s)?.draft);
   const [accessLevel, setAccessLevel] = useState<ApiAccessLevel>('read');

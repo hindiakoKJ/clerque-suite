@@ -217,6 +217,9 @@ Found by the same map, wrong today with or without MariBank:
   red velvet cookie (7), Classic Cookies (7). Brown butter counts as Butter
   / 0.8; tsp: baking soda 5 g, baking powder 4 g, salt 6 g, cornstarch 3 g,
   vanilla 5 ml; a yolk counts as an egg. 10 new ingredients, no cost yet.
+  Sea Salt Cream becomes a batch (K31, `Carolina-Sea-Salt-Cream.xlsx`):
+  Cream Cheese Salted Powder 150 g, water 450 ml, ice 50 g, condensed milk
+  150 g, makes about 800 ml. Whipped Cream is bought.
   The two muffins are on hold (off the menu for now, KJ 19 Nov).
 - Email: production had no `RESEND_API_KEY`, so no reset email was ever
   sent. On 19 Nov KJ set it with `MAIL_FROM=onboarding@resend.dev`, Resend's

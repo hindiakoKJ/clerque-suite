@@ -556,7 +556,10 @@ export class MailService {
     link:          string;
     /** The same PDF Clerque filed on the request, when it could be made. */
     pdf?:          Buffer | null;
+    /** Set (even to null) when this is a list already sent, sent again whole after staff added to it: who added. */
+    updatedBy?:    string | null;
   }): Promise<void> {
+    const updated = opts.updatedBy !== undefined;
     const url = `${this.appUrl}${opts.link}`;
     const rows = opts.lines.map((l) => `
           <tr>
@@ -566,14 +569,16 @@ export class MailService {
           </tr>`).join('');
     await this.send({
       to:      opts.to,
-      subject: `Buy list ${opts.requestNumber}${opts.branchName ? ` — ${opts.branchName}` : ''}`,
+      subject: `Buy list ${opts.requestNumber}${updated ? ' updated' : ''}${opts.branchName ? ` — ${opts.branchName}` : ''}`,
       html:    this.layout(`
         <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1a1a1a;">
           ${opts.lines.length === 0 ? 'Nothing to buy today' : `${opts.lines.length} thing${opts.lines.length === 1 ? '' : 's'} to buy`}
         </h2>
         <p style="margin:0 0 16px;color:#555;line-height:1.6;">
           Hi ${this.escape(opts.name)} — the ${opts.branchName ? this.escape(opts.branchName) + ' ' : ''}list
-          <strong>${this.escape(opts.requestNumber)}</strong> was just sent.
+          <strong>${this.escape(opts.requestNumber)}</strong> ${updated
+            ? `was updated${opts.updatedBy ? ` by ${this.escape(opts.updatedBy)}` : ''}. This is the whole list to buy from now; what was just added is marked NEW.`
+            : 'was just sent.'}
           ${opts.lines.length === 0 ? 'Nothing hit its reorder level: an all-clear, said out loud.' : ''}
         </p>
         ${opts.lines.length > 0 ? `

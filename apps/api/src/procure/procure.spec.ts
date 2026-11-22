@@ -2600,7 +2600,7 @@ describe('ProcureService', () => {
       expect(alerts.buyListUpdated).toHaveBeenCalledWith(TENANT, 'req1', [
         { name: 'Fresh milk', amount: '3 packs (3,000 ml) (was 2 packs (2,000 ml))', serves: null },
         { name: 'Tissue roll (new item from the Kitchen screen)', amount: '4 roll', serves: null },
-      ], 'Kitchen screen');
+      ], 'Kitchen screen', false);
     });
 
     it('says a line is a starting amount, so the owner does not read a kilo of it as a forecast', async () => {
@@ -2616,7 +2616,24 @@ describe('ProcureService', () => {
       expect(notified[0].body).toBe('White Sugar 500 g (starting amount: out, no sales history yet)');
       expect(alerts.buyListUpdated).toHaveBeenCalledWith(TENANT, 'req1', [
         { name: 'White Sugar', amount: '500 g (starting amount: out, no sales history yet)', serves: null },
-      ], 'Kitchen screen');
+      ], 'Kitchen screen', false);
+    });
+
+    it('a Telegram addition sends the whole list again, by email too, with what was added marked NEW', async () => {
+      const { svc, notified, mailed } = build({ people: PEOPLE, lastPacks: packs });
+      const alerts = { buyListUpdated: jest.fn(), buyListSent: jest.fn() };
+      svc.telegramAlerts = alerts;
+      await svc.tellTheOwners(TENANT, req, null, 'staff', {
+        mode: 'updated', changed: [{ rawMaterialId: 'rm-tis', was: null }], byLabel: 'Geomel (Telegram)', wholeList: true,
+      });
+      const sent = alerts.buyListUpdated.mock.calls[0];
+      expect(sent[2].map((l: any) => l.name)).toEqual(['Fresh milk', 'White Sugar', 'Tissue roll — NEW']);
+      expect(sent[4]).toBe(true);
+      expect(notified[0].body).toContain('Fresh milk');
+      expect(mailed).toHaveLength(1);   // Anne; Mia, the manager, has no email
+      expect(mailed[0]).toMatchObject({ requestNumber: 'REQ-20260917-002', pdf: null, updatedBy: 'Geomel (Telegram)' });
+      expect(mailed[0].lines).toHaveLength(3);
+      expect(alerts.buyListSent).not.toHaveBeenCalled();
     });
 
     it('an update that changed nothing tells nobody', async () => {

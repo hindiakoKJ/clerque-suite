@@ -129,13 +129,16 @@ export class TelegramAlertsService {
   }
 
   /** A sent list a kitchen or bar screen added to: only the changed lines, in the bell's words. */
-  buyListUpdated(tenantId: string, requestId: string, lines: Array<{ name: string; amount: string }>, byLabel: string | null): Promise<void> {
+  buyListUpdated(
+    tenantId: string, requestId: string, lines: Array<{ name: string; amount: string }>, byLabel: string | null,
+    wholeList = false,
+  ): Promise<void> {
     return this.fire('buy list updated', tenantId, 'buying', async () => {
       const req = await this.request(tenantId, requestId);
       if (!req) return;
       const chats = await this.links.recipients(tenantId, req.branchId, 'buying');
       if (chats.length === 0) return;
-      const text = buyListUpdatedMessage(req.alert, lines, byLabel, new Date());
+      const text = buyListUpdatedMessage(req.alert, lines, byLabel, new Date(), wholeList);
       for (const chat of chats) this.client.sendMessage(chat, text);
     });
   }

@@ -153,6 +153,18 @@ describe('Telegram alert messages', () => {
     expect(text).toContain('• Tissue roll (new item from the Kitchen screen): 4 roll');
   });
 
+  it('a whole list sent again says so, and the NEW mark survives a long name', () => {
+    const long = 'A very long supply name that keeps going and going well past eighty characters';
+    const text = buyListUpdatedMessage(req, [
+      { name: 'Whole milk', amount: '3 packs (3,000 ml)' },
+      { name: `${long} — NEW`, amount: '2 bottle' },
+    ], 'Geomel (Telegram)', at, true);
+    expect(text.split('\n')[3]).toBe('The whole list to buy from now. What was just added is marked NEW.');
+    expect(text).toContain('• Whole milk: 3 packs (3,000 ml)');
+    expect(text).toContain(`${long} — NEW: 2 bottle`);
+    expect(buyListUpdatedMessage(req, [{ name: 'x', amount: '1' }], null, at)).not.toContain('whole list');
+  });
+
   it('an updated buy list escapes what the shop typed', () => {
     const text = buyListUpdatedMessage({ ...req, shopName: 'Tom & Jerry <Cafe>' }, [{ name: 'Syrup <b>&</b>', amount: '2 > 1' }], 'A<b>', at);
     expect(text).toContain('Tom &amp; Jerry &lt;Cafe&gt;');

@@ -557,7 +557,7 @@ describe('StationRequestService', () => {
       expect(r.status).toBe('SENT');
       expect(requests[0].lines).toEqual([expect.objectContaining({ rawMaterialId: 'tissue', qtyRequested: 1 })]);
       expect(procure.tellTheOwners).toHaveBeenCalledWith(T, expect.anything(), null, 'ana',
-        expect.objectContaining({ mode: 'updated', byLabel: 'Ana (Telegram)', changed: [{ rawMaterialId: 'tissue', was: null }] }));
+        expect.objectContaining({ mode: 'updated', byLabel: 'Ana (Telegram)', wholeList: true, changed: [{ rawMaterialId: 'tissue', was: null }] }));
     });
 
     it('two staff asking for the same thing keep the larger count, and both names', async () => {

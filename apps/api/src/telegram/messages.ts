@@ -334,13 +334,16 @@ export function buyListUpdatedMessage(
   lines: Array<{ name: string; amount: string }>,
   addedBy: string | null,
   at: Date,
+  wholeList = false,
 ): string {
   // The amount is longer than on a sent list ("3 packs (3,000 g) (was 2 packs (2,000 g))"), so it is cut later.
-  const blocks = lines.map((l) => `• ${escapeHtml(clip(l.name, 80))}: ${escapeHtml(clip(l.amount, 120))}`);
+  // The name is cut at 90, not 80, so a whole list's " — NEW" mark survives a long name.
+  const blocks = lines.map((l) => `• ${escapeHtml(clip(l.name, 90))}: ${escapeHtml(clip(l.amount, 120))}`);
   const build = (shown: string[], more: number) => [
     `🛒 <b>Buy list ${escapeHtml(req.requestNumber)} updated</b>`,
     place(req.shopName, req.branchName),
     escapeHtml(`${addedBy ? `Added by ${addedBy} · ` : ''}${manilaTime(at)}`),
+    ...(wholeList ? ['The whole list to buy from now. What was just added is marked NEW.'] : []),
     '',
     ...shown,
     ...(more > 0 ? [`…and ${more} more`] : []),

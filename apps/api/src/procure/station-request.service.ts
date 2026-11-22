@@ -481,7 +481,7 @@ export class StationRequestService {
         });
         if (full) {
           await this.procure.tellTheOwners(ctx.tenantId, full, null, ctx.actorId, {
-            mode: 'updated', changed: changes, byLabel: ctx.byLabel,
+            mode: 'updated', changed: changes, byLabel: ctx.byLabel, wholeList: true,
             newItems: newIds.length > 0 ? { ids: newIds, screen: 'Telegram checklist' } : null,
           });
         }

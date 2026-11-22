@@ -786,7 +786,8 @@ export class ProcureService {
    *
    * Mode 'updated' is a list already sent that a kitchen or bar screen added
    * to: the bell and Telegram name only what changed, and no email goes (the
-   * email and its PDF are the copy as first sent). Returns the names of the
+   * email and its PDF are the copy as first sent). With `wholeList` (staff
+   * asking in Telegram), the whole list goes again, by email too, without a PDF. Returns the names of the
    * people told, or [] when nobody was or telling them failed.
    */
   async tellTheOwners(
@@ -805,6 +806,13 @@ export class ProcureService {
       newItems?: { ids: string[]; screen: string } | null;
       /** Lines put on at a starting amount (out, nothing to size them by): said so, so nobody reads them as a forecast. */
       startingIds?: string[];
+      /**
+       * Updated mode: send the whole list again, not just what changed, by
+       * email as well (KJ, 2026-11-22). For staff asking in Telegram after the
+       * list went out: the owner gets one current list to buy from, with what
+       * was just asked for marked, instead of a list plus loose additions.
+       */
+      wholeList?: boolean;
     } = {},
   ): Promise<string[]> {
     const mode = opts.mode ?? 'sent';
@@ -823,13 +831,14 @@ export class ProcureService {
 
       const changed = mode === 'updated' ? (opts.changed ?? []) : null;
       const wasOf = new Map((changed ?? []).map((c) => [c.rawMaterialId, c.was]));
-      // Updated: only what this change touched. Sent: the whole list, as always.
-      const told = changed ? req.lines.filter((l) => wasOf.has(l.rawMaterialId)) : req.lines;
+      const wholeList = mode === 'updated' && !!opts.wholeList;
+      // Updated: only what this change touched, unless the whole list is wanted. Sent: the whole list, as always.
+      const told = changed && !wholeList ? req.lines.filter((l) => wasOf.has(l.rawMaterialId)) : req.lines;
       if (changed && told.length === 0) return [];
 
       const packs = await this.lastPacks(tenantId, told.map((l) => l.rawMaterialId));
       // What each item still serves, in the same words as the list and the PDF. Only the email carries it.
-      const servesOf = mode === 'sent'
+      const servesOf = mode === 'sent' || wholeList
         ? await this.servesByItem(tenantId, [req.branchId], told.map((l) => l.rawMaterialId))
         : null;
       const newIds = new Set(opts.newItems?.ids ?? []);
@@ -847,7 +856,9 @@ export class ProcureService {
           name:   (newIds.has(l.rawMaterialId) && opts.newItems
             ? `${l.rawMaterial.name} (new item from the ${opts.newItems.screen})`
             : l.rawMaterial.name)
-            + (askers.has(l.rawMaterialId) ? ` (asked by ${askersInWords(askers.get(l.rawMaterialId)!)})` : ''),
+            + (askers.has(l.rawMaterialId) ? ` (asked by ${askersInWords(askers.get(l.rawMaterialId)!)})` : '')
+            // On a whole list sent again, what this change put on is marked, so it stands out among the rest.
+            + (wholeList && wasOf.get(l.rawMaterialId) === null ? ' — NEW' : ''),
           amount: was != null ? `${amount} (was ${amountWords(was, l.rawMaterial.unit, packSize)})` : amount,
           serves: servesOf ? servesSummary(servesOf(req.branchId, l.rawMaterialId, null)) : null,
         };
@@ -858,16 +869,24 @@ export class ProcureService {
 
       if (mode === 'updated') {
         // Telegram too, in the same words as the bell. Not awaited.
-        void this.telegramAlerts?.buyListUpdated(tenantId, req.id, lines, opts.byLabel ?? null);
+        void this.telegramAlerts?.buyListUpdated(tenantId, req.id, lines, opts.byLabel ?? null, wholeList);
         for (const p of people) {
-          if (!this.notifications) break;
-          await this.notifications.create({
-            tenantId, userId: p.id, kind: 'INFO',
-            title: `Buy list ${req.requestNumber} updated${branch ? ` — ${branch}` : ''}`,
-            // The body changes with every raise, so each update is its own bell; an exact repeat within the hour is not.
-            body: listed, link,
-            dedupeKey: `req-updated-${req.requestNumber}-${p.id}`,
-          });
+          if (this.notifications) {
+            await this.notifications.create({
+              tenantId, userId: p.id, kind: 'INFO',
+              title: `Buy list ${req.requestNumber} updated${branch ? ` — ${branch}` : ''}`,
+              // The body changes with every raise, so each update is its own bell; an exact repeat within the hour is not.
+              body: listed, link,
+              dedupeKey: `req-updated-${req.requestNumber}-${p.id}`,
+            });
+          }
+          // The whole list goes by email too. No PDF: the filed PDF is the list as first sent, and stays so.
+          if (wholeList && this.mail && p.email) {
+            await this.mail.sendBuyListSent({
+              to: p.email, name: p.name, requestNumber: req.requestNumber, branchName: branch, lines, link, pdf: null,
+              updatedBy: opts.byLabel ?? null,
+            });
+          }
         }
         return people.map((p) => p.name);
       }
